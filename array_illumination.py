@@ -6,8 +6,8 @@ from scipy.ndimage import gaussian_filter, median_filter, interpolation
 from scipy.signal.windows import hann, gaussian
 import cv2
 
-import array_detect as ar
-
+# 123 test
+# 321 test
 
 def get_lattice_vectors(
         calibration_name=None,
