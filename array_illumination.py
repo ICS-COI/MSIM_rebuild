@@ -14,11 +14,11 @@ def get_lattice_vectors(
         xPix=512,
         yPix=512,
         zPix=201,
-        extent=5,  # 寻找傅里叶尖峰时一个点的覆盖范围，需调整
+        extent=8,  # 寻找傅里叶尖峰时一个点的覆盖范围，需调整 8
         num_spikes=60,  # 寻找傅里叶尖峰时的峰值数量，需调整
         tolerance=3.,  # 傅里叶基向量所得晶格点与尖峰对应的容差
         num_harmonics=3,  # 傅里叶基向量的最小阶数
-        show_ratio=1,  # 显示傅里叶空间的峰值的图像比例，为了更好地看清低频点 0.25
+        show_ratio=0.25,  # 显示傅里叶空间的峰值的图像比例，为了更好地看清低频点 0.25
         low_pass_filter=0.5,  # 低通滤波的截止频率（高频有错位峰值）
         outlier_phase=1.,
         calibration_window_size=10,
@@ -72,10 +72,11 @@ def get_lattice_vectors(
     filtered_fft_abs = spike_filter(fft_abs, display=False)
 
     # 在傅里叶域中寻找候选尖峰
+    if verbose:
+        print("Finding Fourier-space spikes...")
     coords = find_spikes(fft_abs, filtered_fft_abs, extent=extent, num_spikes=num_spikes, low_pass_filter=0.5,
                          show_ratio=show_ratio, display=display,
                          animate=animate)
-    print(len(coords))
 
     # 用这些候选尖峰来确定傅里叶空间晶格
     if verbose:
@@ -109,9 +110,9 @@ def get_lattice_vectors(
         print("Unit cell area: (%0.2f)^2 square pixels" % (
             np.sqrt(np.abs(np.cross(direct_lattice_vectors[0], direct_lattice_vectors[1])))))
 
-    # 看一下实空间中的基向量长什么样
-    if display:
-        show_lattice_overlay(calibration_all, direct_lattice_vectors, verbose=verbose)
+    # # 看一下实空间中的基向量长什么样
+    # if display:
+    #     show_lattice_overlay(calibration_all, direct_lattice_vectors, verbose=verbose)
 
     # 使用实空间中晶格向量和图像数据来测量（第一张校准图像）偏移向量
     offset_vector = get_offset_vector(
@@ -219,6 +220,49 @@ def show_lattice_overlay(calibration_all, direct_lattice_vectors, verbose=False)
     # 显示图形
     plt.axis('off')
     plt.show()
+
+    if verbose:
+        print("Lattice overlay displayed successfully.")
+
+
+def show_lattice_overlay2(calibration_all, direct_lattice_vectors, lattice_points, offset_vector=None, verbose=False):
+    """
+    展示 calibration_all 的第一张图片，并在图片上叠加原点（图像中点）、三个二维向量（从原点出发）、晶格点，叠加的图形用红色展示。
+
+    :param calibration_all: 三维图堆栈，这里可以传入单张二维图当作特殊的三维图堆栈
+    :param direct_lattice_vectors: 三个二维向量
+    :param lattice_points: 晶格点
+    :param offset_vector: 偏移向量
+    :param verbose: 是否打印详细信息，默认为 False
+    """
+    # 获取第一张图片
+    first_image = calibration_all if calibration_all.ndim == 2 else calibration_all[0]
+
+    # 计算图像的中心点
+    if offset_vector is None:
+        center_y, center_x = np.array(first_image.shape) // 2
+    else:
+        center_y, center_x = offset_vector
+
+    # 绘制第一张图片
+    plt.imshow(first_image, cmap='gray')
+
+    # 绘制晶格点
+    plt.scatter(np.array(lattice_points)[:, 1], np.array(lattice_points)[:, 0], color='red', s=10)
+
+    # 绘制原点
+    plt.scatter(center_x, center_y, color='red', s=50)
+
+    # 绘制三个二维向量
+    for vector in direct_lattice_vectors:
+        # 按坐标系论的xy，因此array的坐标顺序需要反一下
+        plt.quiver(center_x, center_y, vector[1], vector[0], angles='xy', scale_units='xy', scale=1, color='red')
+
+    # 设置坐标轴比例
+    plt.axis('equal')
+
+    # 显示图形
+    plt.axis('off')
 
     if verbose:
         print("Lattice overlay displayed successfully.")
@@ -462,8 +506,7 @@ def find_spikes(fft_abs, filtered_fft_abs, extent=15, num_spikes=300, low_pass_f
         plt.figure()
         print('Center pixel:', center_pix)
     for i in range(num_spikes):
-
-        print(np.array(np.unravel_index(filtered_fft_abs.argmax(), filtered_fft_abs.shape)), filtered_fft_abs.max())
+        # print(np.array(np.unravel_index(filtered_fft_abs.argmax(), filtered_fft_abs.shape)), filtered_fft_abs.max())
         cv2.imwrite("filtered_fft_abs.png", filtered_fft_abs * 255 / filtered_fft_abs.max())
         coords.append(np.array(np.unravel_index(filtered_fft_abs.argmax(), filtered_fft_abs.shape)))
         c = coords[-1]
@@ -779,22 +822,28 @@ def get_offset_vector(image, direct_lattice_vectors, prefilter='median', filter_
     # 按照窗口大小初始化窗口，shape=(2 * ws + 1, 2 * ws + 1)
     window = np.zeros([2 * ws + 1] * 2, dtype=np.float64)
     lattice_points = generate_lattice(image.shape, direct_lattice_vectors, edge_buffer=2 + ws)
+
     for lp in lattice_points:
         window += get_centered_subimage(center_point=lp, window_size=ws, image=image.astype(float))
 
     if display:
-        plt.figure()
+        plt.figure(figsize=(10, 10))
+        plt.subplot(221)
+        show_lattice_overlay2(image, direct_lattice_vectors, lattice_points, verbose=verbose)
+        plt.title('Original Lattice Overlay')
+        plt.subplot(222)
         plt.imshow(window, interpolation='nearest', cmap="gray")
-        plt.title('Lattice average\nThis should look like round blobs')
-        plt.show()
+        plt.title('Original Lattice Average')
+        # plt.show()
 
+    # 复制窗口数组，将窗口的上下\左右边界（2）置为 0
     buffered_window = np.array(window)
     buffered_window[:2, :] = 0
     buffered_window[-2:, :] = 0
     buffered_window[:, :2] = 0
     buffered_window[:, -2:] = 0
 
-    while True:  # Don't want maxima on the edges
+    while True:  # 查找不在边界的最大值（平均图像中）
         max_pix = np.unravel_index(buffered_window.argmax(), window.shape)
         if (3 < max_pix[0] < window.shape[0] - 3) and (3 < max_pix[1] < window.shape[1] - 3):
             break
@@ -804,41 +853,80 @@ def get_offset_vector(image, direct_lattice_vectors, prefilter='median', filter_
     if verbose:
         print("Maximum pixel in lattice average:", max_pix)
 
-    correction = simple_max_finder(
-        window[max_pix[0] - 1:max_pix[0] + 2, max_pix[1] - 1:max_pix[1] + 2],
-        show_plots=show_interpolation)
+    correction = simple_max_finder(window[max_pix[0] - 1:max_pix[0] + 2, max_pix[1] - 1:max_pix[1] + 2],
+                                   show_plots=show_interpolation)  # 估计最大像素在平均window中的精确位置
 
     offset_vector = max_pix + correction + np.array(image.shape) // 2 - ws
     if verbose:
         print("Offset vector:", offset_vector)
 
+    # 验证偏移向量是否有效
+    window = np.zeros([2 * ws + 1] * 2, dtype=np.float64)
+    lattice_points = generate_lattice(image.shape, direct_lattice_vectors, center_pix=offset_vector, edge_buffer=2 + ws)
+
+    if display:
+        for lp in lattice_points:
+            window += get_centered_subimage(center_point=lp, window_size=ws, image=image.astype(float))
+        plt.subplot(223)
+        show_lattice_overlay2(image, direct_lattice_vectors, lattice_points, offset_vector, verbose=verbose)
+        plt.title('Adjusted Lattice Overlay with Offset Vector')
+        plt.subplot(224)
+        plt.imshow(window, interpolation='nearest', cmap="gray")
+        plt.title('Lattice Average\nThis should look like round blobs')
+        plt.show()
+
     return offset_vector
 
 
 def generate_lattice(image_shape, lattice_vectors, center_pix='image', edge_buffer=2, return_i_j=False):
-    # 修正判断
+    """
+    根据给定的图像形状、晶格向量和中心像素位置生成晶格点。
+
+    :param image_shape: 图像的形状，通常为一个二元组 (height, width)
+    :param lattice_vectors: 晶格向量列表，至少包含两个二维向量
+    :param center_pix: 晶格的中心像素位置，可以是字符串 'image' 表示以图像中心为中心，
+                       也可以是一个二维数组表示具体的像素坐标，默认为 'image'
+    :param edge_buffer: 图像边缘的缓冲区大小，用于过滤掉靠近边缘的晶格点，默认为 2
+    :param return_i_j: 是否返回晶格点对应的 i 和 j 索引，默认为 False
+    :return: 如果 return_i_j 为 False，返回晶格点列表；
+             如果 return_i_j 为 True，返回一个元组，包含晶格点列表、对应的 i 索引列表和 j 索引列表
+    """
     if isinstance(center_pix, str):
         if center_pix == 'image':
+            # 以图像中心为中心
             center_pix = np.array(image_shape) // 2
     else:
+        # 将输入的中心像素位置转换为相对于图像中心的坐标
         center_pix = np.array(center_pix) - (np.array(image_shape) // 2)
+        # 求解中心像素在晶格向量下的分量
         lattice_components = np.linalg.solve(np.vstack(lattice_vectors[:2]).T, center_pix)
+        # 将分量值限制在 [0, 1) 范围内
         lattice_components_centered = np.mod(lattice_components, 1)
+        # 计算分量的整数部分
         lattice_shift = lattice_components - lattice_components_centered
-        center_pix = (lattice_vectors[0] * lattice_components_centered[0] +
-                      lattice_vectors[1] * lattice_components_centered[1] +
-                      np.array(image_shape) // 2)
+        # 重新计算中心像素位置
+        center_pix = lattice_vectors[0] * lattice_components_centered[0] + \
+                     lattice_vectors[1] * lattice_components_centered[1] + \
+                     np.array(image_shape) // 2
 
+    # 计算生成晶格点所需的向量数量
     num_vectors = int(np.round(1.5 * max(image_shape) / np.sqrt((lattice_vectors[0] ** 2).sum())))  # changed
+    # 定义晶格点的范围
     lower_bounds = (edge_buffer, edge_buffer)
     upper_bounds = (image_shape[0] - edge_buffer, image_shape[1] - edge_buffer)
+    # 生成二维网格索引
     i, j = np.mgrid[-num_vectors:num_vectors, -num_vectors:num_vectors]
+    # 将索引数组展平为一维数组
     i = i.reshape(i.size, 1)
     j = j.reshape(j.size, 1)
+    # 根据索引和晶格向量计算晶格点的位置
     lp = i * lattice_vectors[0] + j * lattice_vectors[1] + center_pix
+    # 过滤掉超出上下界的晶格点
     valid = np.all(lower_bounds < lp, 1) * np.all(lp < upper_bounds, 1)
+    # 提取有效的晶格点
     lattice_points = list(lp[valid])
     if return_i_j:
+        # 返回有效的 i\j 索引减去晶格偏移量
         return (lattice_points,
                 list(i[valid] - lattice_shift[0]),
                 list(j[valid] - lattice_shift[1]))

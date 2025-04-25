@@ -17,7 +17,34 @@ if __name__ == '__main__':
         os.makedirs(result_path)
     print(f"result_path: {result_path}")
 
-    ai.get_lattice_vectors(calibration_name=image_path, result_path=result_path, )
+    ai.get_lattice_vectors(
+        calibration_name=image_path,
+        result_path=result_path,
+        extent=5,  # 寻找傅里叶尖峰时一个点的覆盖范围
+        num_spikes=60,  # 寻找傅里叶尖峰时的峰值数量
+        tolerance=3.,  # 傅里叶基向量所得晶格点与尖峰对应的容差
+        num_harmonics=3,  # 傅里叶基向量的最小阶数
+        show_ratio=1,
+        verbose=True,
+        display=True,
+        animate=False,  # 动画显示傅里叶空间的峰值寻找过程
+        show_interpolation=False,
+    )
+
+    # ai.get_lattice_vectors(
+    #     calibration_name=image_path,
+    #     result_path=result_path,
+    #     extent=8,  # 寻找傅里叶尖峰时一个点的覆盖范围
+    #     num_spikes=60,  # 寻找傅里叶尖峰时的峰值数量
+    #     tolerance=3.,  # 傅里叶基向量所得晶格点与尖峰对应的容差
+    #     num_harmonics=3,  # 傅里叶基向量的最小阶数
+    #     show_ratio=0.25,
+    #     verbose=True,
+    #     display=True,
+    #     animate=False,  # 动画显示傅里叶空间的峰值寻找过程
+    #     show_interpolation=False,
+    # )
+
 
     # _, image_all = cv2.imreadmulti(image_path, flags=cv2.IMREAD_UNCHANGED)
     # image = np.array(image_all)
