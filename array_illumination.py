@@ -6,28 +6,27 @@ from scipy.ndimage import gaussian_filter, median_filter, interpolation
 from scipy.signal.windows import hann, gaussian
 import cv2
 
-# 123 test
-# 321 test
 
 def get_lattice_vectors(
         calibration_name=None,
+        result_path="/result",
         bg=None,
         xPix=512,
         yPix=512,
         zPix=201,
-        extent=5, # 寻找傅里叶尖峰时一个点的覆盖范围，需调整
-        num_spikes=60, # 寻找傅里叶尖峰时的峰值数量，需调整
-        tolerance=3., # 傅里叶基向量所得晶格点与尖峰对应的容差
-        num_harmonics=3, # 傅里叶基向量的最小阶数
-        show_ratio=1, # 显示傅里叶空间的峰值的图像比例，为了更好地看清低频点 0.25
-        low_pass_filter=0.5, # 低通滤波的截止频率（高频有错位峰值）
+        extent=5,  # 寻找傅里叶尖峰时一个点的覆盖范围，需调整
+        num_spikes=60,  # 寻找傅里叶尖峰时的峰值数量，需调整
+        tolerance=3.,  # 傅里叶基向量所得晶格点与尖峰对应的容差
+        num_harmonics=3,  # 傅里叶基向量的最小阶数
+        show_ratio=1,  # 显示傅里叶空间的峰值的图像比例，为了更好地看清低频点 0.25
+        low_pass_filter=0.5,  # 低通滤波的截止频率（高频有错位峰值）
         outlier_phase=1.,
         calibration_window_size=10,
         scan_type='visitech',
         scan_dimensions=None,
         verbose=True,
         display=True,
-        animate=False, # 动画显示傅里叶空间的峰值寻找过程
+        animate=False,  # 动画显示傅里叶空间的峰值寻找过程
         show_interpolation=False,
         show_calibration_steps=False,
         show_lattice=False,
@@ -69,11 +68,12 @@ def get_lattice_vectors(
     print(" Detecting calibration illumination lattice parameters...")
 
     # 粗略估计晶格向量
-    fft_data_folder, fft_abs, fft_avg = get_fft_abs(calibration_name, calibration_all)  # DC term at center
+    fft_data_folder, fft_abs, fft_avg = get_fft_abs(calibration_name, calibration_all, result_path)  # DC term at center
     filtered_fft_abs = spike_filter(fft_abs, display=False)
 
     # 在傅里叶域中寻找候选尖峰
-    coords = find_spikes(fft_abs, filtered_fft_abs, extent=extent, num_spikes=num_spikes,low_pass_filter=0.5, show_ratio=show_ratio,display=display,
+    coords = find_spikes(fft_abs, filtered_fft_abs, extent=extent, num_spikes=num_spikes, low_pass_filter=0.5,
+                         show_ratio=show_ratio, display=display,
                          animate=animate)
     print(len(coords))
 
@@ -299,7 +299,7 @@ def show_lattice_overlay(calibration_all, direct_lattice_vectors, verbose=False)
 #     return dot_centers
 
 
-def get_fft_abs(filename, image_data, show_steps=False):
+def get_fft_abs(filename, image_data, result_path, show_steps=False):
     """
     计算图像数据的傅里叶变换，并返回FFT的绝对值和平均值。
     如果之前已经对相同文件进行过FFT计算且结果文件存在，函数将直接加载这些结果，避免重复计算。
@@ -311,10 +311,10 @@ def get_fft_abs(filename, image_data, show_steps=False):
     """
 
     # 快速傅里叶变换（FFT）数据以一系列原始二进制文件的形式存储，每个二维z切片对应一个文件。这些文件的命名为000000.dat、000001.dat...
-    basename = os.path.splitext(filename)[0]  # 去掉文件扩展名
-    fft_abs_name = basename + '_fft_abs.npy'
-    fft_avg_name = basename + '_fft_avg.npy'
-    fft_data_folder = basename + '_fft_data'
+    basename = os.path.splitext(os.path.basename(filename))[0]  # 去掉文件扩展名，只取文件名部分
+    fft_abs_name = os.path.join(result_path, basename + '_fft_abs.npy')
+    fft_avg_name = os.path.join(result_path, basename + '_fft_avg.npy')
+    fft_data_folder = os.path.join(result_path, basename + '_fft_data')
 
     # 检查之前是否已经计算过相同文件的FFT结果，若存在则直接加载
     if (os.path.exists(fft_abs_name) and
@@ -412,7 +412,8 @@ def display_image(f, title):
     plt.show()
 
 
-def find_spikes(fft_abs, filtered_fft_abs, extent=15, num_spikes=300, low_pass_filter=0.5,show_ratio=1., display=True, animate=False):
+def find_spikes(fft_abs, filtered_fft_abs, extent=15, num_spikes=300, low_pass_filter=0.5, show_ratio=1., display=True,
+                animate=False):
     """
     查找傅里叶变换的绝对值中最大的峰值，这些峰值通常对应于图像中的亮点。
     :param fft_abs: 傅里叶变换的绝对值之和
@@ -426,10 +427,10 @@ def find_spikes(fft_abs, filtered_fft_abs, extent=15, num_spikes=300, low_pass_f
     center_pix = np.array(fft_abs.shape) // 2
     log_fft_abs = np.log(1 + fft_abs)
     filtered_fft_abs = np.array(filtered_fft_abs)
-    filtered_fft_abs[0:int(low_pass_filter*filtered_fft_abs.shape[0]/2),:] = 0
-    filtered_fft_abs[int(-low_pass_filter*filtered_fft_abs.shape[0]/2):,:] = 0
-    filtered_fft_abs[:, 0:int(low_pass_filter * filtered_fft_abs.shape[1]/2)] = 0
-    filtered_fft_abs[:, int(-low_pass_filter * filtered_fft_abs.shape[1]/2):] = 0
+    filtered_fft_abs[0:int(low_pass_filter * filtered_fft_abs.shape[0] / 2), :] = 0
+    filtered_fft_abs[int(-low_pass_filter * filtered_fft_abs.shape[0] / 2):, :] = 0
+    filtered_fft_abs[:, 0:int(low_pass_filter * filtered_fft_abs.shape[1] / 2)] = 0
+    filtered_fft_abs[:, int(-low_pass_filter * filtered_fft_abs.shape[1] / 2):] = 0
 
     if display:
         # 截取fft_abs和 filtered_fft_abs的中心区域
@@ -444,8 +445,8 @@ def find_spikes(fft_abs, filtered_fft_abs, extent=15, num_spikes=300, low_pass_f
 
         # 显示 fft_abs 和 filtered_fft_abs 的图像
         image_extent = np.float64([-0.5 - show_ratio * center_pix[1],
-                                   filtered_fft_abs.shape[1] - 0.5 - (2-show_ratio) * center_pix[1],
-                                   filtered_fft_abs.shape[0] - 0.5 - (2-show_ratio) * center_pix[0],
+                                   filtered_fft_abs.shape[1] - 0.5 - (2 - show_ratio) * center_pix[1],
+                                   filtered_fft_abs.shape[0] - 0.5 - (2 - show_ratio) * center_pix[0],
                                    -0.5 - show_ratio * center_pix[0]])  # 左边界、右边界、下边界、上边界（以图像中心为原点）（只是数值，不会截取图像）
         plt.figure()
         plt.subplot(1, 2, 1)
@@ -462,8 +463,8 @@ def find_spikes(fft_abs, filtered_fft_abs, extent=15, num_spikes=300, low_pass_f
         print('Center pixel:', center_pix)
     for i in range(num_spikes):
 
-        print(np.array(np.unravel_index(filtered_fft_abs.argmax(), filtered_fft_abs.shape)),filtered_fft_abs.max())
-        cv2.imwrite("filtered_fft_abs.png", filtered_fft_abs*255/filtered_fft_abs.max())
+        print(np.array(np.unravel_index(filtered_fft_abs.argmax(), filtered_fft_abs.shape)), filtered_fft_abs.max())
+        cv2.imwrite("filtered_fft_abs.png", filtered_fft_abs * 255 / filtered_fft_abs.max())
         coords.append(np.array(np.unravel_index(filtered_fft_abs.argmax(), filtered_fft_abs.shape)))
         c = coords[-1]
         # 将当前尖峰周围的区域置为0，避免重复检测
@@ -479,9 +480,9 @@ def find_spikes(fft_abs, filtered_fft_abs, extent=15, num_spikes=300, low_pass_f
                                     int(center_pix[1] - center_pix[1] * show_ratio): int(
                                         center_pix[1] + center_pix[1] * show_ratio)]
 
-            image_extent = np.float64([0,filtered_fft_abs.shape[1]*show_ratio,
-                                       filtered_fft_abs.shape[0]*show_ratio,0])
-                                        # 左边界、右边界、下边界、上边界（以图像中心为原点）（只是数值，不会截取图像）
+            image_extent = np.float64([0, filtered_fft_abs.shape[1] * show_ratio,
+                                       filtered_fft_abs.shape[0] * show_ratio, 0])
+            # 左边界、右边界、下边界、上边界（以图像中心为原点）（只是数值，不会截取图像）
 
             print(i, ':', c)
             plt.clf()
@@ -687,7 +688,7 @@ def get_precise_basis(coords, basis_vectors, fft_abs, tolerance, verbose=False):
             A = np.array(spike_indices)  # 晶格点索引矩阵
             v = np.array(spike_locations)  # 晶格点位置矩阵
             # 使用最小二乘法求解精确的基向量（Ax=v）
-            print(A.shape,A.dtype, v.shape,v.dtype)
+            print(A.shape, A.dtype, v.shape, v.dtype)
             precise_basis_vectors, residues, rank, s = np.linalg.lstsq(A, v, rcond=None)
             if verbose:
                 print("Precise basis vectors:")
@@ -749,7 +750,8 @@ def simple_max_finder(a, show_plots=True):
 
     return true_max
 
-def get_offset_vector(image, direct_lattice_vectors, prefilter='median', filter_size = 3,verbose=True, display=True,
+
+def get_offset_vector(image, direct_lattice_vectors, prefilter='median', filter_size=3, verbose=True, display=True,
                       show_interpolation=True):
     """
     已知晶格向量，计算一张图片中晶格点的偏移向量
@@ -812,6 +814,7 @@ def get_offset_vector(image, direct_lattice_vectors, prefilter='median', filter_
 
     return offset_vector
 
+
 def generate_lattice(image_shape, lattice_vectors, center_pix='image', edge_buffer=2, return_i_j=False):
     # 修正判断
     if isinstance(center_pix, str):
@@ -842,6 +845,7 @@ def generate_lattice(image_shape, lattice_vectors, center_pix='image', edge_buff
     else:
         return lattice_points
 
+
 def get_centered_subimage(
         center_point, window_size, image, background='none'):
     x, y = np.round(center_point).astype(int)
@@ -853,4 +857,3 @@ def get_centered_subimage(
         subimage -= background[xSl, ySl]
     interpolation.shift(subimage, shift=(x, y) - center_point, output=subimage)
     return subimage[1:-1, 1:-1]
-
