@@ -11,7 +11,7 @@ def get_lattice_vectors(
         calibration_name=None,
         result_path="/result",
         bg=None,
-        xPix=512,
+        xPix=512,111
         yPix=512,
         zPix=201,
         extent=5,  # 寻找傅里叶尖峰时一个点的覆盖范围，需调整
