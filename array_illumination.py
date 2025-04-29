@@ -11,19 +11,17 @@ def get_lattice_vectors(
         calibration_name=None,
         result_path="/result",
         bg=None,
-        xPix=512,
-        yPix=512,
-        zPix=201,
         extent=8,  # 寻找傅里叶尖峰时一个点的覆盖范围，需调整 8
         num_spikes=60,  # 寻找傅里叶尖峰时的峰值数量，需调整
         tolerance=3.,  # 傅里叶基向量所得晶格点与尖峰对应的容差
         num_harmonics=3,  # 傅里叶基向量的最小阶数
         show_ratio=0.25,  # 显示傅里叶空间的峰值的图像比例，为了更好地看清低频点 0.25
-        low_pass_filter=0.5,  # 低通滤波的截止频率（高频有错位峰值）
+        low_pass_filter=0.1,  # 低通滤波的截止频率（高频有错位峰值）
         outlier_phase=1.,
         calibration_window_size=10,
-        scan_type='visitech',
+        scan_type='dmd',
         scan_dimensions=None,
+        dot_size_show=1,  # 显示晶格图案的点的大小
         verbose=True,
         display=True,
         animate=False,  # 动画显示傅里叶空间的峰值寻找过程
@@ -59,11 +57,14 @@ def get_lattice_vectors(
     :param record_parameters:
     :return:
     """
-    _, calibration_all = cv2.imreadmulti(calibration_name, flags=cv2.IMREAD_GRAYSCALE)
+    _, calibration_all = cv2.imreadmulti(calibration_name, flags=cv2.IMREAD_UNCHANGED)
     calibration_all = np.array(calibration_all)
-
-    # ar.detect_dot_centers(calibration_all, weighted=True, verbose=False, show=True)
-    # 希望可以先得到粗略的向量，再进行精调
+    # 如果三维堆栈是三通道的，转为灰度图
+    if len(calibration_all.shape) == 4:
+        grayscale_all = []
+        for i in range(calibration_all.shape[0]):
+            grayscale_all.append(cv2.cvtColor(calibration_all[i], cv2.COLOR_RGB2GRAY))
+        calibration_all = np.array(grayscale_all)
 
     print(" Detecting calibration illumination lattice parameters...")
 
@@ -74,7 +75,8 @@ def get_lattice_vectors(
     # 在傅里叶域中寻找候选尖峰
     if verbose:
         print("Finding Fourier-space spikes...")
-    coords = find_spikes(fft_abs, filtered_fft_abs, extent=extent, num_spikes=num_spikes, low_pass_filter=0.5,
+    coords = find_spikes(fft_abs, filtered_fft_abs, extent=extent, num_spikes=num_spikes,
+                         low_pass_filter=low_pass_filter,
                          show_ratio=show_ratio, display=display,
                          animate=animate)
 
@@ -112,7 +114,7 @@ def get_lattice_vectors(
 
     # # 看一下实空间中的基向量长什么样
     # if display:
-    #     show_lattice_overlay(calibration_all, direct_lattice_vectors, verbose=verbose)
+    #     show_lattice_overlay1(calibration_all, direct_lattice_vectors, verbose=verbose)
 
     # 使用实空间中晶格向量和图像数据来测量（第一张校准图像）偏移向量
     offset_vector = get_offset_vector(
@@ -121,111 +123,117 @@ def get_lattice_vectors(
         verbose=verbose, display=display,
         show_interpolation=show_interpolation)
 
-    # shift_vector = get_shift_vector(
-    #     corrected_basis_vectors, fft_data_folder, filtered_fft_abs,
-    #     num_harmonics=num_harmonics, outlier_phase=outlier_phase,
-    #     verbose=verbose, display=display,
-    #     scan_type=scan_type, scan_dimensions=scan_dimensions)
-    #
-    # corrected_shift_vector, final_offset_vector = get_precise_shift_vector(
-    #     direct_lattice_vectors, shift_vector, offset_vector,
-    #     image_data[-1, :, :], zPix, scan_type, verbose)
-    #
-    # if show_lattice:
-    #     which_filename = 0
-    #     while True:
-    #         print("Displaying:", filename_list[which_filename])
-    #         image_data = load_image_data(filename_list[which_filename])
-    #         show_lattice_overlay(
-    #             image_data, direct_lattice_vectors,
-    #             offset_vector, corrected_shift_vector)
-    #         if len(filename_list) > 1:
-    #             which_filename = input(
-    #                 "Display lattice overlay for which dataset? [done]:")
-    #             try:
-    #                 which_filename = int(which_filename)
-    #             except ValueError:
-    #                 if which_filename == '':
-    #                     print("Done displaying lattice overlay.")
-    #                     break
-    #                 else:
-    #                     continue
-    #             if which_filename >= len(filename_list):
-    #                 which_filename = len(filename_list) - 1
-    #         else:
-    #             break
-    #
-    # # image_data is large. Figures hold references to it, stinking up the place.
-    # if display or show_lattice:
-    #     plt.close('all')
-    #     import gc
-    #     gc.collect()  # Actually required, for once!
-    #
-    # if record_parameters:
-    #     params_file_path = os.path.join(os.path.dirname(filename_list[0]), 'parameters.txt')
-    #
-    #     with open(params_file_path, 'w') as params:
-    #         params.write("Direct lattice vectors: {}\n\n".format(repr(direct_lattice_vectors)))
-    #         params.write("Corrected shift vector: {}\n\n".format(repr(corrected_shift_vector)))
-    #         params.write("Offset vector: {}\n\n".format(repr(offset_vector)))
-    #         try:
-    #             params.write("Final offset vector: {}\n\n".format(repr(final_offset_vector)))
-    #         except UnboundLocalError:
-    #             params.write("Final offset vector: Not recorded\n\n")
-    #         if lake is not None:
-    #             params.write("Lake filename: {}\n\n".format(lake))
-    #
-    # if lake is None or bg is None:
-    #     return direct_lattice_vectors, corrected_shift_vector, offset_vector
-    # else:
-    #     intensities_vs_galvo_position, background_frame = spot_intensity_vs_galvo_position(lake, xPix, yPix,
-    #                                                                                        lake_lattice_vectors,
-    #                                                                                        lake_shift_vector,
-    #                                                                                        lake_offset_vector,
-    #                                                                                        bg,
-    #                                                                                        window_size=calibration_window_size,
-    #                                                                                        show_steps=show_calibration_steps)
-    #     return direct_lattice_vectors, corrected_shift_vector, offset_vector, intensities_vs_galvo_position, background_frame
+    shift_vector = get_shift_vector(
+        corrected_basis_vectors, fft_data_folder, filtered_fft_abs,
+        num_harmonics=num_harmonics, outlier_phase=outlier_phase,
+        verbose=verbose, display=display,
+        scan_type=scan_type, scan_dimensions=scan_dimensions)
+
+    zPix = calibration_all.shape[0]
+    corrected_shift_vector, final_offset_vector = get_precise_shift_vector(
+        direct_lattice_vectors, shift_vector, offset_vector,
+        calibration_all[-1, :, :], zPix, scan_type, verbose)
+
+    if show_lattice:
+        show_lattice_overlay_all(calibration_all, direct_lattice_vectors, offset_vector, corrected_shift_vector,
+                                 dot_size=dot_size_show)
+
+        # which_filename = 0
+        # while True:
+        #     print("Displaying:", filename_list[which_filename])
+        #     image_data = load_image_data(filename_list[which_filename])
+        #     show_lattice_overlay_all(
+        #         image_data, direct_lattice_vectors,
+        #         offset_vector, corrected_shift_vector)
+        #     if len(filename_list) > 1:
+        #         which_filename = input(
+        #             "Display lattice overlay for which dataset? [done]:")
+        #         try:
+        #             which_filename = int(which_filename)
+        #         except ValueError:
+        #             if which_filename == '':
+        #                 print("Done displaying lattice overlay.")
+        #                 break
+        #             else:
+        #                 continue
+        #         if which_filename >= len(filename_list):
+        #             which_filename = len(filename_list) - 1
+        #     else:
+        #         break
+
+    # 关闭所有的 matplotlib 图形窗口，并且调用 Python 的垃圾回收机制来释放不再使用的内存。
+    if display or show_lattice:
+        plt.close('all')
+        import gc
+        gc.collect()
+
+    if record_parameters:
+        params_file_path = os.path.join(result_path, 'parameters.txt')
+
+        with open(params_file_path, 'w') as params:
+            params.write("Direct lattice vectors: {}\n\n".format(repr(direct_lattice_vectors)))
+            params.write("Corrected shift vector: {}\n\n".format(repr(corrected_shift_vector)))
+            params.write("Offset vector: {}\n\n".format(repr(offset_vector)))
+            try:
+                params.write("Final offset vector: {}\n\n".format(repr(final_offset_vector)))
+            except UnboundLocalError:
+                params.write("Final offset vector: Not recorded\n\n")
+            if calibration_name is not None:
+                params.write("Calibration filename: {}\n\n".format(calibration_name))
+
+    if calibration_name is None or bg is None:
+        return direct_lattice_vectors, corrected_shift_vector, offset_vector
+    else:
+        # 校准图像光斑强度
+        intensities_vs_galvo_position, background_frame = spot_intensity_vs_galvo_position(lake, xPix, yPix,
+                                                                                           lake_lattice_vectors,
+                                                                                           lake_shift_vector,
+                                                                                           lake_offset_vector,
+                                                                                           bg,
+                                                                                           window_size=calibration_window_size,
+                                                                                           show_steps=show_calibration_steps)
+        return direct_lattice_vectors, corrected_shift_vector, offset_vector, intensities_vs_galvo_position, background_frame
     return
 
 
-def show_lattice_overlay(calibration_all, direct_lattice_vectors, verbose=False):
-    """
-    展示 calibration_all 的第一张图片，并在图片上叠加原点（图像中点）、三个二维向量（从原点出发），叠加的图形用红色展示。
+# def show_lattice_overlay1(calibration_all, direct_lattice_vectors, verbose=False):
+#     """
+#     展示 calibration_all 的第一张图片，并在图片上叠加原点（图像中点）、三个二维向量（从原点出发），叠加的图形用红色展示。
+#
+#     :param calibration_all: 三维图堆栈
+#     :param direct_lattice_vectors: 三个二维向量
+#     :param verbose: 是否打印详细信息，默认为 False
+#     """
+#     # 获取第一张图片
+#     first_image = calibration_all[0]
+#
+#     # 计算图像的中心点
+#     center_y, center_x = np.array(first_image.shape) // 2
+#
+#     # 绘制第一张图片
+#     plt.imshow(first_image, cmap='gray')
+#
+#     # 绘制原点
+#     plt.scatter(center_x, center_y, color='red', s=50)
+#
+#     # 绘制三个二维向量
+#     for vector in direct_lattice_vectors:
+#         # 按坐标系论的xy，因此array的坐标顺序需要反一下
+#         plt.quiver(center_x, center_y, vector[1], vector[0], angles='xy', scale_units='xy', scale=1, color='red')
+#
+#     # 设置坐标轴比例
+#     plt.axis('equal')
+#
+#     # 显示图形
+#     plt.axis('off')
+#     plt.show()
+#
+#     if verbose:
+#         print("Lattice overlay displayed successfully.")
 
-    :param calibration_all: 三维图堆栈
-    :param direct_lattice_vectors: 三个二维向量
-    :param verbose: 是否打印详细信息，默认为 False
-    """
-    # 获取第一张图片
-    first_image = calibration_all[0]
 
-    # 计算图像的中心点
-    center_y, center_x = np.array(first_image.shape) // 2
-
-    # 绘制第一张图片
-    plt.imshow(first_image, cmap='gray')
-
-    # 绘制原点
-    plt.scatter(center_x, center_y, color='red', s=50)
-
-    # 绘制三个二维向量
-    for vector in direct_lattice_vectors:
-        # 按坐标系论的xy，因此array的坐标顺序需要反一下
-        plt.quiver(center_x, center_y, vector[1], vector[0], angles='xy', scale_units='xy', scale=1, color='red')
-
-    # 设置坐标轴比例
-    plt.axis('equal')
-
-    # 显示图形
-    plt.axis('off')
-    plt.show()
-
-    if verbose:
-        print("Lattice overlay displayed successfully.")
-
-
-def show_lattice_overlay2(calibration_all, direct_lattice_vectors, lattice_points, offset_vector=None, verbose=False):
+def show_lattice_overlay_origin(calibration_all, direct_lattice_vectors, lattice_points, offset_vector=None,
+                                verbose=False):
     """
     展示 calibration_all 的第一张图片，并在图片上叠加原点（图像中点）、三个二维向量（从原点出发）、晶格点，叠加的图形用红色展示。
 
@@ -266,6 +274,46 @@ def show_lattice_overlay2(calibration_all, direct_lattice_vectors, lattice_point
 
     if verbose:
         print("Lattice overlay displayed successfully.")
+
+
+def show_lattice_overlay_all(image_data, direct_lattice_vectors, offset_vector, shift_vector, dot_size=1):
+    plt.figure()
+    s = 0
+    while True:
+        plt.clf()
+        show_me = median_filter(np.array(image_data[s, :, :]), size=3)
+        dots = np.zeros(list(show_me.shape) + [4])
+        lattice_points = generate_lattice(
+            show_me.shape, direct_lattice_vectors,
+            center_pix=offset_vector + get_shift(shift_vector, s))
+        for lp in lattice_points:
+            x, y = np.round(lp).astype(int)
+            dots[x, y, 0::3] = 1
+            # 根据 dot_size 调整点的大小，这里简单地复制点周围的像素来增大点的视觉效果
+            for i in range(-dot_size, dot_size + 1):
+                for j in range(-dot_size, dot_size + 1):
+                    new_x, new_y = x + i, y + j
+                    if 0 <= new_x < show_me.shape[0] and 0 <= new_y < show_me.shape[1]:
+                        dots[new_x, new_y, 0::3] = 1
+
+        plt.imshow(show_me, cmap="gray", interpolation='nearest')
+        plt.imshow(dots, interpolation='nearest')
+        plt.title("Red dots show the calculated illumination pattern")
+        plt.show()
+
+        new_s = input("Next frame [exit]:")
+        if new_s == '':
+            print("Exiting")
+            break
+        try:
+            s = int(new_s)
+        except ValueError:
+            print("Response not understood. Exiting display.")
+            break
+        s %= image_data.shape[0]
+        print("Displaying frame %i" % (s))
+
+    return None
 
 
 # def detect_dot_centers(image, weighted=False, verbose=False, show=False):
@@ -364,20 +412,20 @@ def get_fft_abs(filename, image_data, result_path, show_steps=False):
     if (os.path.exists(fft_abs_name) and
             os.path.exists(fft_avg_name) and
             os.path.exists(fft_data_folder)):
-        print("Loading", os.path.split(fft_abs_name)[1])  # 分离路径和文件名
+        print("Loading", os.path.split(fft_abs_name)[1])
         fft_abs = np.load(fft_abs_name)
         print("Loading", os.path.split(fft_avg_name)[1])
         fft_avg = np.load(fft_avg_name)
     else:
-        # 不存在就生成
         print("Generating fft_abs, fft_avg and fft_data...")
-        os.mkdir(fft_data_folder)
+        if not os.path.exists(fft_data_folder):
+            os.mkdir(fft_data_folder)
         fft_abs = np.zeros(image_data.shape[1:])
         fft_avg = np.zeros(image_data.shape[1:], dtype=np.complex128)
         window = (hann(image_data.shape[1]).reshape(image_data.shape[1], 1) *
-                  hann(image_data.shape[2]).reshape(1, image_data.shape[2]))  # 汉宁窗
+                  hann(image_data.shape[2]).reshape(1, image_data.shape[2]))  # Multiplication of matrices
         if show_steps:
-            plt.figure()
+            fig = plt.figure()
         for z in range(image_data.shape[0]):
             fft_data = np.fft.fftshift(  # Stored shifted!
                 np.fft.fftn(window * image_data[z, :, :], axes=(0, 1)))
@@ -429,8 +477,7 @@ def spike_filter(fft_abs, display=False):
         display_image(f, 'Filtered up-down')
 
     # 再次平滑处理
-    f = gaussian_filter(f, sigma=0.5)
-    f = gaussian_filter(f, sigma=(1.5))
+    f = gaussian_filter(f, sigma=1.5)
     if display:
         display_image(f, 'Resmoothed')
 
@@ -471,10 +518,15 @@ def find_spikes(fft_abs, filtered_fft_abs, extent=15, num_spikes=300, low_pass_f
     center_pix = np.array(fft_abs.shape) // 2
     log_fft_abs = np.log(1 + fft_abs)
     filtered_fft_abs = np.array(filtered_fft_abs)
-    filtered_fft_abs[0:int(low_pass_filter * filtered_fft_abs.shape[0] / 2), :] = 0
-    filtered_fft_abs[int(-low_pass_filter * filtered_fft_abs.shape[0] / 2):, :] = 0
-    filtered_fft_abs[:, 0:int(low_pass_filter * filtered_fft_abs.shape[1] / 2)] = 0
-    filtered_fft_abs[:, int(-low_pass_filter * filtered_fft_abs.shape[1] / 2):] = 0
+
+    # 近似低通滤波器
+    mask1 = int(low_pass_filter * filtered_fft_abs.shape[0] / 2)
+    mask2 = int(low_pass_filter * filtered_fft_abs.shape[1] / 2)
+    if mask1 > 0 and mask2 > 0:
+        filtered_fft_abs[0:mask1, :] = 0
+        filtered_fft_abs[-mask1:, :] = 0
+        filtered_fft_abs[:, 0:mask2] = 0
+        filtered_fft_abs[:, -mask2:] = 0
 
     if display:
         # 截取fft_abs和 filtered_fft_abs的中心区域
@@ -507,7 +559,7 @@ def find_spikes(fft_abs, filtered_fft_abs, extent=15, num_spikes=300, low_pass_f
         print('Center pixel:', center_pix)
     for i in range(num_spikes):
         # print(np.array(np.unravel_index(filtered_fft_abs.argmax(), filtered_fft_abs.shape)), filtered_fft_abs.max())
-        cv2.imwrite("filtered_fft_abs.png", filtered_fft_abs * 255 / filtered_fft_abs.max())
+        # cv2.imwrite("filtered_fft_abs.png", filtered_fft_abs * 255 / filtered_fft_abs.max())
         coords.append(np.array(np.unravel_index(filtered_fft_abs.argmax(), filtered_fft_abs.shape)))
         c = coords[-1]
         # 将当前尖峰周围的区域置为0，避免重复检测
@@ -829,7 +881,7 @@ def get_offset_vector(image, direct_lattice_vectors, prefilter='median', filter_
     if display:
         plt.figure(figsize=(10, 10))
         plt.subplot(221)
-        show_lattice_overlay2(image, direct_lattice_vectors, lattice_points, verbose=verbose)
+        show_lattice_overlay_origin(image, direct_lattice_vectors, lattice_points, verbose=verbose)
         plt.title('Original Lattice Overlay')
         plt.subplot(222)
         plt.imshow(window, interpolation='nearest', cmap="gray")
@@ -868,7 +920,7 @@ def get_offset_vector(image, direct_lattice_vectors, prefilter='median', filter_
         for lp in lattice_points:
             window += get_centered_subimage(center_point=lp, window_size=ws, image=image.astype(float))
         plt.subplot(223)
-        show_lattice_overlay2(image, direct_lattice_vectors, lattice_points, offset_vector, verbose=verbose)
+        show_lattice_overlay_origin(image, direct_lattice_vectors, lattice_points, offset_vector, verbose=verbose)
         plt.title('Adjusted Lattice Overlay with Offset Vector')
         plt.subplot(224)
         plt.imshow(window, interpolation='nearest', cmap="gray")
@@ -945,3 +997,291 @@ def get_centered_subimage(
         subimage -= background[xSl, ySl]
     interpolation.shift(subimage, shift=(x, y) - center_point, output=subimage)
     return subimage[1:-1, 1:-1]
+
+
+def get_shift_vector(
+        fourier_lattice_vectors, fft_data_folder, filtered_fft_abs, num_harmonics=3, outlier_phase=1., verbose=True,
+        display=True, scan_type='visitech', scan_dimensions=None):
+    if verbose:
+        print("\nCalculating shift vector...")
+
+    center_pix = np.array(filtered_fft_abs.shape) // 2
+    harmonic_pixels = []
+    values = {}
+    for v in fourier_lattice_vectors:
+        harmonic_pixels.append([])
+        for i in range(1, num_harmonics + 1):
+            expected_pix = (np.round((i * v)) + center_pix).astype(int)
+            roi = filtered_fft_abs[expected_pix[0] - 1:expected_pix[0] + 2, expected_pix[1] - 1:expected_pix[1] + 2]
+            shift = -1 + np.array(
+                np.unravel_index(roi.argmax(), roi.shape))
+            actual_pix = expected_pix + shift - center_pix
+            if verbose:
+                print("Expected pixel:", expected_pix - center_pix)
+                print("Shift:", shift)
+                print("Brightest neighboring pixel:", actual_pix)
+            harmonic_pixels[-1].append(tuple(actual_pix))
+            values[harmonic_pixels[-1][-1]] = []
+
+    num_slices = len(os.listdir(fft_data_folder))
+    if verbose:
+        print('\n')
+
+    for z in range(num_slices):
+        if verbose:
+            sys.stdout.write("\rLoading harmonic pixels from FFT slice %06i" % z)
+            sys.stdout.flush()
+        fft_data = load_fft_slice(fft_data_folder, xPix=filtered_fft_abs.shape[0], yPix=filtered_fft_abs.shape[1],
+                                  which_slice=z)
+        for hp in harmonic_pixels:
+            for p in hp:
+                values[p].append(fft_data[p[0] + center_pix[0], p[1] + center_pix[1]])
+
+    if verbose:
+        print()
+
+    slopes = []
+    k = []
+    if display:
+        plt.figure()
+    if scan_dimensions is not None:
+        scan_dimensions = tuple(reversed(scan_dimensions))
+    for hp in harmonic_pixels:
+        for n, p in enumerate(hp):
+            values[p] = np.unwrap(np.angle(values[p]))
+            if scan_type == 'visitech':
+                slope = np.polyfit(range(len(values[p])), values[p], deg=1)[0]
+                values[p] -= slope * np.arange(len(values[p]))
+            elif scan_type == 'dmd':
+                if scan_dimensions[0] * scan_dimensions[1] != num_slices:
+                    raise UserWarning(
+                        "The scan dimensions are %i by %i," +
+                        " but there are %i slices" % (scan_dimensions[0], scan_dimensions[1], num_slices))
+                slope = [0, 0]
+                slope[0] = np.polyfit(range(scan_dimensions[1]),
+                                      values[p].reshape(scan_dimensions).sum(axis=0) * 1.0 / scan_dimensions[0],
+                                      deg=1)[0]
+                values[p] -= slope[0] * np.arange(len(values[p]))
+                slope[1] = np.polyfit(
+                    scan_dimensions[1] * np.arange(scan_dimensions[0]),
+                    values[p].reshape(
+                        scan_dimensions).sum(axis=1) * 1.0 / scan_dimensions[1],
+                    deg=1)[0]
+                values[p] -= slope[1] * scan_dimensions[1] * (np.arange(len(values[p])) // scan_dimensions[1])
+                slope[1] *= scan_dimensions[1]
+            values[p] -= values[p].mean()
+            if abs(values[p]).mean() < outlier_phase:
+                k.append(p * (-2. * np.pi / np.array(fft_data.shape)))
+                slopes.append(slope)
+            else:
+                if verbose:
+                    print("Ignoring outlier:", p)
+            if display:
+                plt.plot(values[p], '.-', label=repr(p))
+    if display:
+        plt.title('This should look like noise. Sudden jumps mean bad data!')
+        plt.ylabel('Deviation from expected phase')
+        plt.xlabel('Image number')
+        plt.grid()
+        plt.legend(prop={'size': 8})
+        plt.axis('tight')
+        x_limits = 1.05 * np.array(plt.xlim())
+        x_limits -= x_limits[-1] * 0.025
+        plt.xlim(x_limits)
+        plt.show()
+
+    if scan_type == 'visitech':
+        x_s, residues, rank, s = np.linalg.lstsq(np.array(k), np.array(slopes), rcond=None)
+    elif scan_type == 'dmd':
+        x_s, residues, rank, s = {}, [0, 0], [0, 0], [0, 0]
+        x_s['fast_axis'], residues[0], rank[0], s[0] = np.linalg.lstsq(np.array(k), np.array([sl[0] for sl in slopes]),
+                                                                       rcond=None)
+        x_s['slow_axis'], residues[1], rank[1], s[1] = np.linalg.lstsq(np.array(k), np.array([sl[1] for sl in slopes]),
+                                                                       rcond=None)
+        x_s['scan_dimensions'] = tuple(reversed(scan_dimensions))
+
+    if verbose:
+        print("Shift vector:")
+        pprint.pprint(x_s)
+        print("Residues:", residues)
+        print("Rank:", rank)
+        print("s:", s)
+    return x_s
+
+
+def load_fft_slice(fft_data_folder, xPix, yPix, which_slice=0):
+    bytes_per_pixel = 16
+    filename = os.path.join(fft_data_folder, '%06i.dat' % (which_slice))
+    data_file = open(filename, 'rb')
+    return np.memmap(data_file, dtype=np.complex128, mode='r').reshape(xPix, yPix)
+
+
+def get_precise_shift_vector(
+        direct_lattice_vectors, shift_vector, offset_vector, last_image, zPix, scan_type, verbose):
+    """Use the offset vector to correct the shift vector"""
+    final_offset_vector = get_offset_vector(
+        image=last_image,
+        direct_lattice_vectors=direct_lattice_vectors,
+        verbose=False, display=False, show_interpolation=False)
+
+    final_lattice = generate_lattice(last_image.shape, direct_lattice_vectors,
+                                     center_pix=offset_vector + get_shift(shift_vector, zPix - 1))
+    closest_approach = 1e12
+    print(type(last_image.shape[0]))
+    for p in final_lattice:
+        dif = p - final_offset_vector
+        distance_sq = (dif ** 2).sum()
+        if distance_sq < closest_approach:
+            closest_lattice_point = p
+            closest_approach = distance_sq
+    shift_error = closest_lattice_point - final_offset_vector
+    if scan_type == 'visitech':
+        movements = zPix - 1
+        corrected_shift_vector = shift_vector - (shift_error * 1.0 / movements)
+    elif scan_type == 'dmd':
+        movements = ((zPix - 1) // shift_vector['scan_dimensions'][0])
+        corrected_shift_vector = dict(shift_vector)
+        corrected_shift_vector['slow_axis'] = (shift_vector['slow_axis'] - shift_error * 1.0 / movements)
+
+    if verbose:
+        print("\nCorrecting shift vector...")
+        print(" Initial shift vector:")
+        print(' ', pprint.pprint(shift_vector))
+        print(" Final offset vector:", final_offset_vector)
+        print(" Closest predicted lattice point:", closest_lattice_point)
+        print(" Error:", shift_error, "in", movements, "movements")
+        print(" Corrected shift vector:")
+        print(' ', pprint.pprint(corrected_shift_vector))
+        print()
+
+    return corrected_shift_vector, final_offset_vector
+
+
+def get_shift(shift_vector, frame_number):
+    if isinstance(shift_vector, dict):
+        """This means we have a 2D shift vector"""
+        fast_steps = frame_number % shift_vector['scan_dimensions'][0]
+        slow_steps = frame_number // shift_vector['scan_dimensions'][0]
+        return (shift_vector['fast_axis'] * fast_steps +
+                shift_vector['slow_axis'] * slow_steps)
+    else:
+        """This means we have a 1D shift vector, like the Visitech Infinity"""
+        return frame_number * shift_vector
+
+
+def spot_intensity_vs_galvo_position(
+        lake_filename, xPix, yPix, direct_lattice_vectors, shift_vector, offset_vector,
+        background_filename, window_size=5, show_steps=False, display=False):
+    """Calibrate how the intensity of each spot varies with galvo
+    position, using a fluorescent lake dataset and a stack of
+    light-free background images."""
+
+    lake_basename = os.path.splitext(lake_filename)[0]
+    lake_intensities_name = lake_basename + '_spot_intensities.pkl'
+    background_basename = os.path.splitext(background_filename)[0]
+    background_name = background_basename + '_background_image.raw'
+    background_directory_name = os.path.dirname(background_basename)
+
+    try:
+        hot_pixels = np.fromfile(
+            os.path.join(background_directory_name, 'hot_pixels.txt'), sep=', ')
+    except IOError:
+        skip_hot_pix = input("Hot pixel list not found. Continue? [y]/n:")
+        if skip_hot_pix == 'n':
+            raise
+        else:
+            hot_pixels = None
+    else:
+        hot_pixels = hot_pixels.reshape(2, len(hot_pixels) // 2)
+
+    if os.path.exists(lake_intensities_name) and os.path.exists(background_name):
+        print("\nIllumination intensity calibration already calculated.")
+        print("Loading", os.path.split(lake_intensities_name)[1])
+        intensities_vs_galvo_position = pickle.load(open(lake_intensities_name, 'rb'))
+        print("Loading", os.path.split(background_name)[1])
+        try:
+            bg = np.fromfile(background_name, dtype=float).reshape(xPix, yPix)
+        except ValueError:
+            print("\n\nWARNING: the data file:")
+            print(background_name)
+            print("may not be the size it was expected to be.\n\n")
+            raise
+    else:
+        print("\nCalculating illumination spot intensities...")
+        print("Constructing background image...")
+        background_image_data = load_image_data(background_filename)
+        bg = np.zeros((xPix, yPix), dtype=float)
+        for z in range(background_image_data.shape[0]):
+            bg += background_image_data[z, :, :]
+        bg *= 1.0 / background_image_data.shape[0]
+        del background_image_data
+        if hot_pixels is not None:
+            bg = remove_hot_pixels(bg, hot_pixels)
+        print("Background image complete.")
+
+        lake_image_data = load_image_data(lake_filename)
+        intensities_vs_galvo_position = {}
+        """A dict of dicts. Element [i, j][z] gives the intensity of the
+        i'th, j'th spot in the lattice, in frame z"""
+        if show_steps:
+            plt.figure()
+        print("Computing flat-field calibration...")
+        for z in range(lake_image_data.shape[0]):
+            im = np.array(lake_image_data[z, :, :], dtype=float)
+            if hot_pixels is not None:
+                im = remove_hot_pixels(im, hot_pixels)
+            sys.stdout.write("\rCalibration image %i" % z)
+            sys.stdout.flush()
+            lattice_points, i_list, j_list = generate_lattice(
+                image_shape=(xPix, yPix),
+                lattice_vectors=direct_lattice_vectors,
+                center_pix=offset_vector + get_shift(shift_vector, z),
+                edge_buffer=window_size + 1,
+                return_i_j=True)
+
+            for m, lp in enumerate(lattice_points):
+                i, j = int(i_list[m]), int(j_list[m])
+                intensity_history = intensities_vs_galvo_position.setdefault((i, j), {})  # Get this spot's history
+                spot_image = get_centered_subimage(
+                    center_point=lp, window_size=window_size,
+                    image=im, background=bg)
+                intensity_history[z] = float(spot_image.sum())  # Funny thing...
+                if show_steps:
+                    plt.clf()
+                    plt.imshow(spot_image, interpolation='nearest', cmap="gray")
+                    plt.title("Spot %i, %i in frame %i\nCentered at %0.2f, %0.2f" % (i, j, z, lp[0], lp[1]))
+                    plt.show()
+                    response = input()
+                    if response == 'q' or response == 'e' or response == 'x':
+                        print("Done showing steps...")
+                        show_steps = False
+
+        """Normalize the intensity values"""
+        num_entries = 0
+        total_sum = 0
+        for hist in intensities_vs_galvo_position.values():
+            for intensity in hist.values():
+                num_entries += 1
+                total_sum += intensity
+        inverse_avg = num_entries * 1.0 / total_sum
+        for hist in intensities_vs_galvo_position.values():
+            for k in hist.keys():
+                hist[k] *= inverse_avg
+        print("\nSaving", os.path.split(lake_intensities_name)[1])
+        pickle.dump(intensities_vs_galvo_position, open(lake_intensities_name, 'wb'), protocol=2)
+        print("Saving", os.path.split(background_name)[1])
+        bg.tofile(background_name)
+
+    if display:
+        plt.figure()
+        num_lines = 0
+        for (i, j), spot_hist in intensities_vs_galvo_position.items()[:10]:
+            num_lines += 1
+            sh = spot_hist.items()
+            plt.plot([frame_num for frame_num, junk in sh],
+                     [intensity for junk, intensity in sh],
+                     ('-', '-.')[num_lines > 5],
+                     label=repr((i, j)))
+        plt.legend()
+        plt.show()
+    return intensities_vs_galvo_position, bg  # bg is short for 'background'
