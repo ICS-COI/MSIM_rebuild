@@ -5,12 +5,13 @@ import matplotlib.pyplot as plt
 from scipy.ndimage import gaussian_filter, median_filter, interpolation
 from scipy.signal.windows import hann, gaussian
 import cv2
+from datetime import datetime
 
 
 def get_lattice_vectors(
-        calibration_name=None,
-        result_path="/result",
-        bg=None,
+        calibration=None,
+        background=None,
+        result_path=None,
         extent=8,  # 寻找傅里叶尖峰时一个点的覆盖范围，需调整 8
         num_spikes=60,  # 寻找傅里叶尖峰时的峰值数量，需调整
         tolerance=3.,  # 傅里叶基向量所得晶格点与尖峰对应的容差
@@ -26,38 +27,45 @@ def get_lattice_vectors(
         display=True,
         animate=False,  # 动画显示傅里叶空间的峰值寻找过程
         show_interpolation=False,
-        show_calibration_steps=False,
+        show_calibration_steps=True,
         show_lattice=False,
         record_parameters=True):
     """
     由校准图像计算出照明晶格参数（给定一个扫描场图像栈，找出照明晶格图案的基向量。）
-    :param calibration: 校准图像
-    :param bg:
-    :param use_lake_lattice:
-    :param use_all_lake_parameters:
-    :param xPix:
-    :param yPix:
-    :param zPix:
-    :param bg_zPix:
-    :param preframes:
-    :param extent:
-    :param num_spikes:
-    :param tolerance:
-    :param num_harmonics:
-    :param outlier_phase:
-    :param calibration_window_size:
-    :param scan_type:
-    :param scan_dimensions:
-    :param verbose:
-    :param display:
-    :param animate:
-    :param show_interpolation:
-    :param show_calibration_steps:
-    :param show_lattice:
-    :param record_parameters:
+
+    :param calibration: 校准图像的路径
+    :param background: 背景图像的路径
+    :param result_path: 结果保存的路径
+    :param extent: 寻找傅里叶尖峰时一个点的覆盖范围，需调整
+    :param num_spikes: 寻找傅里叶尖峰时的峰值数量，需调整
+    :param tolerance: 傅里叶基向量所得晶格点与尖峰对应的容差
+    :param num_harmonics: 傅里叶基向量的最小阶数
+    :param show_ratio: 显示傅里叶空间的峰值的图像比例，为了更好地看清低频点
+    :param low_pass_filter: 低通滤波的截止频率（高频有错位峰值）
+    :param outlier_phase: 傅里叶空间的峰值的相位偏移，用于去除异常值
+    :param calibration_window_size: 校准图像的窗口大小
+    :param scan_type: 扫描类型，'dmd'
+    :param scan_dimensions: 扫描图像的尺寸
+    :param dot_size_show: 显示晶格图案的点的大小
+    :param verbose: 是否打印详细信息
+    :param display: 是否展示图像
+    :param animate: 是否显示傅里叶峰值查找的动画
+    :param show_interpolation: 是否显示寻找精确最大值的插值过程
+    :param show_calibration_steps: 是否显示校准过程
+    :param show_lattice: 是否展示参数确定后的晶格图案
+    :param record_parameters: 是否记录参数
     :return:
     """
-    _, calibration_all = cv2.imreadmulti(calibration_name, flags=cv2.IMREAD_UNCHANGED)
+    if result_path is None:
+        filename = os.path.splitext(os.path.basename(calibration))[0]
+        # timestamp = datetime.now().strftime("_%Y%m%d_%H_%M_%S")
+        timestamp = datetime.now().strftime("_%Y%m%d")
+        result_path = os.path.join(os.path.join(os.getcwd(), "result"), filename + timestamp)
+        if not os.path.exists(result_path):
+            os.makedirs(result_path)
+        print(f"result_path: {result_path}")
+
+    _, calibration_all = cv2.imreadmulti(calibration, flags=cv2.IMREAD_UNCHANGED)
     calibration_all = np.array(calibration_all)
     # 如果三维堆栈是三通道的，转为灰度图
     if len(calibration_all.shape) == 4:
@@ -65,11 +73,12 @@ def get_lattice_vectors(
         for i in range(calibration_all.shape[0]):
             grayscale_all.append(cv2.cvtColor(calibration_all[i], cv2.COLOR_RGB2GRAY))
         calibration_all = np.array(grayscale_all)
+    xPix, yPix, zPix = calibration_all.shape
 
     print(" Detecting calibration illumination lattice parameters...")
 
     # 粗略估计晶格向量
-    fft_data_folder, fft_abs, fft_avg = get_fft_abs(calibration_name, calibration_all, result_path)  # DC term at center
+    fft_data_folder, fft_abs, fft_avg = get_fft_abs(calibration, calibration_all, result_path)  # DC term at center
     filtered_fft_abs = spike_filter(fft_abs, display=False)
 
     # 在傅里叶域中寻找候选尖峰
@@ -129,7 +138,6 @@ def get_lattice_vectors(
         verbose=verbose, display=display,
         scan_type=scan_type, scan_dimensions=scan_dimensions)
 
-    zPix = calibration_all.shape[0]
     corrected_shift_vector, final_offset_vector = get_precise_shift_vector(
         direct_lattice_vectors, shift_vector, offset_vector,
         calibration_all[-1, :, :], zPix, scan_type, verbose)
@@ -178,22 +186,21 @@ def get_lattice_vectors(
                 params.write("Final offset vector: {}\n\n".format(repr(final_offset_vector)))
             except UnboundLocalError:
                 params.write("Final offset vector: Not recorded\n\n")
-            if calibration_name is not None:
-                params.write("Calibration filename: {}\n\n".format(calibration_name))
+            if calibration is not None:
+                params.write("Calibration filename: {}\n\n".format(calibration))
 
-    if calibration_name is None or bg is None:
+    if calibration is None or background is None:
         return direct_lattice_vectors, corrected_shift_vector, offset_vector
     else:
         # 校准图像光斑强度
-        intensities_vs_galvo_position, background_frame = spot_intensity_vs_galvo_position(lake, xPix, yPix,
-                                                                                           lake_lattice_vectors,
-                                                                                           lake_shift_vector,
-                                                                                           lake_offset_vector,
-                                                                                           bg,
+        intensities_vs_galvo_position, background_frame = spot_intensity_vs_galvo_position(calibration, background,
+                                                                                           xPix, yPix,
+                                                                                           direct_lattice_vectors,
+                                                                                           corrected_shift_vector,
+                                                                                           offset_vector,
                                                                                            window_size=calibration_window_size,
                                                                                            show_steps=show_calibration_steps)
         return direct_lattice_vectors, corrected_shift_vector, offset_vector, intensities_vs_galvo_position, background_frame
-    return
 
 
 # def show_lattice_overlay1(calibration_all, direct_lattice_vectors, verbose=False):
@@ -1169,9 +1176,8 @@ def get_shift(shift_vector, frame_number):
         return frame_number * shift_vector
 
 
-def spot_intensity_vs_galvo_position(
-        lake_filename, xPix, yPix, direct_lattice_vectors, shift_vector, offset_vector,
-        background_filename, window_size=5, show_steps=False, display=False):
+def spot_intensity_vs_galvo_position(lake_filename, background_filename, xPix, yPix, direct_lattice_vectors,
+                                     shift_vector, offset_vector, window_size=5, show_steps=False, display=False):
     """Calibrate how the intensity of each spot varies with galvo
     position, using a fluorescent lake dataset and a stack of
     light-free background images."""
@@ -1285,3 +1291,9 @@ def spot_intensity_vs_galvo_position(
         plt.legend()
         plt.show()
     return intensities_vs_galvo_position, bg  # bg is short for 'background'
+
+
+def load_image_data(filename):
+    """Load the 16-bit raw data from the Visitech Infinity"""
+    _, image = cv2.imreadmulti(filename, flags=cv2.IMREAD_UNCHANGED)
+    image = np.array(image)
