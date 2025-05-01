@@ -64,7 +64,8 @@ def get_lattice_vectors(
         result_path = os.path.join(os.path.join(os.getcwd(), "result"), filename + timestamp)
         if not os.path.exists(result_path):
             os.makedirs(result_path)
-        print(f"result_path: {result_path}\n")
+        if verbose:
+            print(f"result_path: {result_path}\n")
 
     calibration_all = load_image_data(calibration)
     zPix, xPix, yPix = calibration_all.shape
@@ -72,7 +73,8 @@ def get_lattice_vectors(
     print("Detecting calibration illumination lattice parameters...")
 
     # 粗略估计晶格向量
-    fft_data_folder, fft_abs, fft_avg = get_fft_abs(calibration, calibration_all, result_path)  # DC term at center
+    fft_data_folder, fft_abs, fft_avg = get_fft_abs(calibration, calibration_all, result_path,
+                                                    verbose=verbose)  # DC term at center
     filtered_fft_abs = spike_filter(fft_abs, display=False)
 
     # 在傅里叶域中寻找候选尖峰
@@ -184,7 +186,7 @@ def get_lattice_vectors(
                 params.write("Calibration filename: {}\n\n".format(calibration))
 
     if calibration is None or background is None:
-        return direct_lattice_vectors, corrected_shift_vector, offset_vector
+        return calibration_all.shape, direct_lattice_vectors, corrected_shift_vector, offset_vector
     else:
         # 校准图像光斑强度
         intensities_vs_galvo_position, background_frame = spot_intensity_position(calibration, background,
@@ -195,8 +197,315 @@ def get_lattice_vectors(
                                                                                   window_size=calibration_window_size,
                                                                                   show_steps=show_calibration_steps,
                                                                                   display=False,
+                                                                                  verbose=verbose,
                                                                                   result_path=result_path)
-        return direct_lattice_vectors, corrected_shift_vector, offset_vector, intensities_vs_galvo_position, background_frame
+        return calibration_all.shape, direct_lattice_vectors, corrected_shift_vector, offset_vector, intensities_vs_galvo_position, background_frame
+
+
+def reconstruct_image_parallel(
+        data_filename, calibration_filename,
+        xPix, yPix, zPix, steps,
+        lattice_vectors, offset_vector, shift_vector,
+        new_grid_xrange, new_grid_yrange,
+        background_filename = None,
+        result_path=None,
+        num_processes=1,
+        window_footprint=10,
+        aperture_size=3,
+        make_widefield_image=True,
+        make_confocal_image=False,  # Broken, for now
+        verbose=True,
+        show_steps=False,  # For debugging
+        show_slices=False,  # For debugging
+        intermediate_data=False,  # Memory hog, for stupid reasons, leave 'False'
+        normalize=False,  # Of uncertain merit, leave 'False' probably
+        display=False,
+        cover=False,
+):
+    input_arguments = locals()  # 收集所有局部变量
+    input_arguments.pop('num_processes')
+
+    if result_path is None:
+        filename = os.path.splitext(os.path.basename(calibration_filename))[0]
+        # timestamp = datetime.now().strftime("_%Y%m%d_%H_%M_%S")
+        timestamp = datetime.now().strftime("_%Y%m%d")
+        result_path = os.path.join(os.path.join(os.getcwd(), "result"), filename + timestamp)
+        if not os.path.exists(result_path):
+            os.makedirs(result_path)
+        if verbose:
+            print(f"result_path: {result_path}\n")
+
+    basename = os.path.splitext(os.path.basename(data_filename))[0]  # 去掉文件扩展名，只取文件名部分
+    reconstruct_image_name = os.path.join(result_path, basename + '_reconstruct.tif')
+
+    print(f"\nReconstruct {basename}...")
+    print(reconstruct_image_name)
+
+    if not cover and os.path.exists(reconstruct_image_name):
+        print("\nImage already reconstructed.")
+        print("Loading", os.path.split(enderlein_image_name)[1])
+        images = {}
+        try:
+            images['reconstruct_image'] = load_image_data(reconstruct_image_name)
+        except ValueError:
+            print("\n\nWARNING: the data file:")
+            print(enderlein_image_name)
+            print("may not be the size it was expected to be.\n\n")
+            raise
+    else:
+        start_time = time.perf_counter()
+        if num_processes == 1:
+            images = enderlein_image_subprocess(**input_arguments)
+#         else:
+#             input_arguments['intermediate_data'] = False  # Difficult for parallel
+#             input_arguments['show_steps'] = False  # Difficult for parallel
+#             input_arguments['show_slices'] = False  # Difficult for parallel
+#             input_arguments['display'] = False  # Annoying for parallel
+#             input_arguments['verbose'] = False  # Annoying for parallel
+#
+#             step_boundaries = list(range(0, steps, 10)) + [steps]
+#             step_boundaries = [(step_boundaries[i], step_boundaries[i + 1] - 1) for i in
+#                                range(len(step_boundaries) - 1)]
+#             running_processes = {}
+#             first_harvest = True
+#             random_prefix = '%06i_' % (random.randint(0, 999999))
+#             while len(running_processes) > 0 or len(step_boundaries) > 0:
+#                 """Load up the subprocesses"""
+#                 while (len(running_processes) < num_processes and
+#                        len(step_boundaries) > 0):
+#                     sb = step_boundaries.pop(0)
+#                     input_arguments['start_frame'], input_arguments['end_frame'] = sb
+#                     output_filename = (random_prefix + '%i_%i_intermediate_data.temp' % sb)
+#                     sys.stdout.write("\rProcessing frames: " + repr(sb[0]) + '-' + repr(sb[1]) + ' ' * 10)
+#                     sys.stdout.flush()
+#                     command_string = """
+# import array_illumination, pickle
+# from numpy import array
+# input_arguments=%s
+# sub_images = array_illumination.enderlein_image_subprocess(**input_arguments)
+# pickle.dump(sub_images, open('%s', 'wb'), protocol=2)
+# """ % (repr(input_arguments), output_filename)
+#                     running_processes[output_filename] = subprocess.Popen(
+#                         [sys.executable, '-c %s' % command_string],
+#                         stdin=subprocess.PIPE,
+#                         stdout=subprocess.PIPE,
+#                         stderr=subprocess.PIPE)
+#                 """Poke each subprocess, harvest the finished ones"""
+#                 pop_me = []
+#                 for f, proc in running_processes.items():
+#                     if proc.poll() is not None:  # Time to harvest
+#                         pop_me.append(f)
+#                         report = proc.communicate()
+#                         if report != (b'', b''):
+#                             print(report)
+#                             raise UserWarning("Problem with a subprocess.")
+#                         sub_images = pickle.load(open(f, 'rb'))
+#                         os.remove(f)
+#
+#                         if first_harvest:
+#                             images = sub_images
+#                             first_harvest = False
+#                         else:
+#                             for k in images.keys():
+#                                 images[k] += sub_images[k]
+#                 for p in pop_me:  # Forget about the harvested processes
+#                     running_processes.pop(p)
+#                 """Chill for a second"""
+#                 time.sleep(0.2)
+#         end_time = time.perf_counter()
+#         print("Elapsed time: %0.2f seconds" % (end_time - start_time))
+#         images['enderlein_image'].tofile(enderlein_image_name)
+#         if make_widefield_image:
+#             images['widefield_image'].tofile(basename + '_widefield.raw')
+#         if make_confocal_image:
+#             images['confocal_image'].tofile(basename + '_confocal.raw')
+#     display = True
+#     if display:
+#         plt.figure()
+#         plt.imshow(images['enderlein_image'], interpolation='nearest', cmap="gray")
+#         plt.colorbar()
+#         plt.show()
+#     return images
+
+def enderlein_image_subprocess(
+        data_filename, lake_filename, background_filename,
+        xPix, yPix, zPix, steps, preframes,
+        lattice_vectors, offset_vector, shift_vector,
+        new_grid_xrange, new_grid_yrange,
+        start_frame=None, end_frame=None,
+        window_footprint=10,
+        aperture_size=3,
+        make_widefield_image=True,
+        make_confocal_image=False,  # Broken, for now
+        verbose=True,
+        show_steps=False,  # For debugging
+        show_slices=False,  # For debugging
+        intermediate_data=False,  # Memory hog, for stupid reasons. Leave 'False'
+        normalize=False,  # Of uncertain merit, leave 'False' probably
+        display=False,
+):
+    basename = os.path.splitext(data_filename)[0]
+#     enderlein_image_name = basename + '_enderlein_image.raw'
+#     lake_basename = os.path.splitext(lake_filename)[0]
+#     lake_intensities_name = lake_basename + '_spot_intensities.pkl'
+#     background_basename = os.path.splitext(background_filename)[0]
+#     background_name = background_basename + '_background_image.raw'
+#
+#     intensities_vs_galvo_position = pickle.load(open(lake_intensities_name, 'rb'))
+#     background_directory_name = os.path.dirname(background_name)
+#     try:
+#         background_frame = np.fromfile(background_name).reshape(xPix, yPix).astype(float)
+#     except ValueError:
+#         print("\n\nWARNING: the data file:")
+#         print(background_name)
+#         print("may not be the size it was expected to be.\n\n")
+#         raise
+#     try:
+#         hot_pixels = np.fromfile(os.path.join(background_directory_name, 'hot_pixels.txt'), sep=', ')
+#     except:
+#         hot_pixels = None
+#
+#     else:
+#         hot_pixels = hot_pixels.reshape(2, len(hot_pixels) // 2)
+#
+#     if show_steps or show_slices: fig = plt.figure()
+#     if start_frame is None:
+#         start_frame = 0
+#     if end_frame is None:
+#         end_frame = steps - 1
+#     new_grid_x = np.linspace(*new_grid_xrange)
+#     new_grid_y = np.linspace(*new_grid_yrange)
+#     enderlein_image = np.zeros((new_grid_x.shape[0], new_grid_y.shape[0]), dtype=np.float64)
+#     enderlein_normalization = np.zeros_like(enderlein_image)
+#     this_frames_enderlein_image = np.zeros_like(enderlein_image)
+#     this_frames_normalization = np.zeros_like(enderlein_image)
+#     if intermediate_data:
+#         cumulative_sum = np.memmap(
+#             basename + '_cumsum.raw', dtype=float, mode='w+',
+#             shape=(steps,) + enderlein_image.shape)
+#         processed_frames = np.memmap(
+#             basename + '_frames.raw', dtype=float, mode='w+',
+#             shape=(steps,) + enderlein_image.shape)
+#     if make_widefield_image:
+#         widefield_image = np.zeros_like(enderlein_image)
+#         widefield_coordinates = np.meshgrid(new_grid_x, new_grid_y)
+#         widefield_coordinates = (
+#             widefield_coordinates[0].reshape(
+#                 new_grid_x.shape[0] * new_grid_y.shape[0]),
+#             widefield_coordinates[1].reshape(
+#                 new_grid_x.shape[0] * new_grid_y.shape[0]))
+#     if make_confocal_image:
+#         confocal_image = np.zeros_like(enderlein_image)
+#     enderlein_normalization.fill(1e-12)
+#     aperture = gaussian(2 * window_footprint + 1, std=aperture_size
+#                         ).reshape(2 * window_footprint + 1, 1)
+#     aperture = aperture * aperture.T
+#     grid_step_x = new_grid_x[1] - new_grid_x[0]
+#     grid_step_y = new_grid_y[1] - new_grid_y[0]
+#     subgrid_footprint = np.floor(
+#         (-1 + window_footprint * 0.5 / grid_step_x,
+#          -1 + window_footprint * 0.5 / grid_step_y))
+#     subgrid = (  # Add 2*(r_0 - r_M) to this to get s_desired
+#         window_footprint + 2 * grid_step_x * np.arange(
+#             -subgrid_footprint[0], subgrid_footprint[0] + 1),
+#         window_footprint + 2 * grid_step_y * np.arange(
+#             -subgrid_footprint[1], subgrid_footprint[1] + 1))
+#     subgrid_points = ((2 * subgrid_footprint[0] + 1) *
+#                       (2 * subgrid_footprint[1] + 1))
+#     for z in range(start_frame, end_frame + 1):
+#         im = load_image_slice(
+#             filename=data_filename, xPix=xPix, yPix=yPix,
+#             preframes=preframes, which_slice=z).astype(float)
+#         if hot_pixels is not None:
+#             im = remove_hot_pixels(im, hot_pixels)
+#         this_frames_enderlein_image.fill(0.)
+#         this_frames_normalization.fill(1e-12)
+#         if verbose:
+#             sys.stdout.write("\rProcessing raw data image %i" % (z))
+#             sys.stdout.flush()
+#         if make_widefield_image:
+#             widefield_image += interpolation.map_coordinates(im, widefield_coordinates).reshape(new_grid_y.shape[0],
+#                                                                                                 new_grid_x.shape[0]).T
+#         lattice_points, i_list, j_list = (generate_lattice(image_shape=(xPix, yPix), lattice_vectors=lattice_vectors,
+#                                                            center_pix=offset_vector + get_shift(shift_vector, z),
+#                                                            edge_buffer=window_footprint + 1, return_i_j=True))
+#         for m, lp in enumerate(lattice_points):
+#             i, j = int(i_list[m]), int(j_list[m])
+#             """Take an image centered on each illumination point"""
+#             spot_image = get_centered_subimage(center_point=lp, window_size=window_footprint, image=im,
+#                                                background=background_frame)
+#             """Aperture the image with a synthetic pinhole"""
+#             intensity_normalization = 1.0 / (intensities_vs_galvo_position.get((i, j), {}).get(z, np.inf))
+#             if (intensity_normalization == 0 or spot_image.shape != (
+#                     2 * window_footprint + 1, 2 * window_footprint + 1)):
+#                 continue  # Skip to the next spot
+#             apertured_image = (aperture * spot_image * intensity_normalization)
+#             nearest_grid_index = np.round((lp - (new_grid_x[0], new_grid_y[0])) / (grid_step_x, grid_step_y))
+#             nearest_grid_point = ((new_grid_x[0], new_grid_y[0]) + (grid_step_x, grid_step_y) * nearest_grid_index)
+#             new_coordinates = np.meshgrid(subgrid[0] + 2 * (nearest_grid_point[0] - lp[0]),
+#                                           subgrid[1] + 2 * (nearest_grid_point[1] - lp[1]))
+#             resampled_image = interpolation.map_coordinates(apertured_image, (
+#                 new_coordinates[0].reshape(int(subgrid_points)),
+#                 new_coordinates[1].reshape(int(subgrid_points)))).reshape(int(2 * subgrid_footprint[1] + 1),
+#                                                                           int(2 * subgrid_footprint[0] + 1)).T
+#             """Add the recentered image back to the scan grid"""
+#             if intensity_normalization > 0:
+#                 this_frames_enderlein_image[
+#                 int(nearest_grid_index[0] - subgrid_footprint[0]):int(nearest_grid_index[0] + subgrid_footprint[0] + 1),
+#                 int(nearest_grid_index[1] - subgrid_footprint[1]):int(nearest_grid_index[1] + subgrid_footprint[1] + 1),
+#                 ] += resampled_image
+#                 this_frames_normalization[
+#                 int(nearest_grid_index[0] - subgrid_footprint[0]):int(nearest_grid_index[0] + subgrid_footprint[0] + 1),
+#                 int(nearest_grid_index[1] - subgrid_footprint[1]):int(nearest_grid_index[1] + subgrid_footprint[1] + 1),
+#                 ] += 1
+#                 if make_confocal_image:  # FIXME!!!!!!!
+#                     confocal_image[
+#                     nearest_grid_index[0] - window_footprint:nearest_grid_index[0] + window_footprint + 1,
+#                     nearest_grid_index[1] - window_footprint:nearest_grid_index[1] + window_footprint + 1
+#                     ] += interpolation.shift(
+#                         apertured_image, shift=(lp - nearest_grid_point))
+#             if show_steps:
+#                 plt.clf()
+#                 plt.suptitle(
+#                     "Spot %i, %i in frame %i\nCentered at %0.2f, %0.2f\n" % (i, j, z, lp[0], lp[1]) + (
+#                             "Nearest grid point: %i, %i" % (nearest_grid_point[0], nearest_grid_point[1])))
+#                 plt.subplot(1, 3, 1)
+#                 plt.imshow(
+#                     spot_image, interpolation='nearest', cmap="gray")
+#                 plt.subplot(1, 3, 2)
+#                 plt.imshow(apertured_image, interpolation='nearest', cmap="gray")
+#                 plt.subplot(1, 3, 3)
+#                 plt.imshow(resampled_image, interpolation='nearest', cmap="gray")
+#                 fig.show()
+#                 fig.canvas.draw()
+#                 response = input('\nHit enter to continue, q to quit:')
+#                 if response == 'q' or response == 'e' or response == 'x':
+#                     print("Done showing steps...")
+#                     show_steps = False
+#         enderlein_image += this_frames_enderlein_image
+#         enderlein_normalization += this_frames_normalization
+#         if not normalize:
+#             enderlein_normalization.fill(1)
+#             this_frames_normalization.fill(1)
+#         if intermediate_data:
+#             cumulative_sum[z, :, :] = (enderlein_image * 1. / enderlein_normalization)
+#             cumulative_sum.flush()
+#             processed_frames[z, :, :] = this_frames_enderlein_image * 1. / (this_frames_normalization)
+#             processed_frames.flush()
+#         if show_slices:
+#             plt.clf()
+#             plt.imshow(enderlein_image * 1.0 / enderlein_normalization, cmap="gray", interpolation='nearest')
+#             fig.show()
+#             fig.canvas.draw()
+#             response = input('Hit enter to continue...')
+#
+#     images = {}
+#     images['enderlein_image'] = (enderlein_image * 1.0 / enderlein_normalization)
+#     if make_widefield_image:
+#         images['widefield_image'] = widefield_image
+#     if make_confocal_image:
+#         images['confocal_image'] = confocal_image
+#     return images
 
 
 # def show_lattice_overlay1(calibration_all, direct_lattice_vectors, verbose=False):
@@ -394,7 +703,7 @@ def show_lattice_overlay_all(image_data, direct_lattice_vectors, offset_vector, 
 #     return dot_centers
 
 
-def get_fft_abs(filename, image_data, result_path, show_steps=False):
+def get_fft_abs(filename, image_data, result_path, verbose=False, show_steps=False):
     """
     计算图像数据的傅里叶变换，并返回FFT的绝对值和平均值。
     如果之前已经对相同文件进行过FFT计算且结果文件存在，函数将直接加载这些结果，避免重复计算。
@@ -415,9 +724,12 @@ def get_fft_abs(filename, image_data, result_path, show_steps=False):
     if (os.path.exists(fft_abs_name) and
             os.path.exists(fft_avg_name) and
             os.path.exists(fft_data_folder)):
-        print("Loading", os.path.split(fft_abs_name)[1])
+        print("FFT already calculated.")
+        if verbose:
+            print("Loading", os.path.split(fft_abs_name)[1])
         fft_abs = np.load(fft_abs_name)
-        print("Loading", os.path.split(fft_avg_name)[1])
+        if verbose:
+            print("Loading", os.path.split(fft_avg_name)[1])
         fft_avg = np.load(fft_avg_name)
     else:
         print("Generating fft_abs, fft_avg and fft_data...")
@@ -786,7 +1098,6 @@ def get_precise_basis(coords, basis_vectors, fft_abs, tolerance, verbose=False):
             A = np.array(spike_indices)  # 晶格点索引矩阵
             v = np.array(spike_locations)  # 晶格点位置矩阵
             # 使用最小二乘法求解精确的基向量（Ax=v）
-            print(A.shape, A.dtype, v.shape, v.dtype)
             precise_basis_vectors, residues, rank, s = np.linalg.lstsq(A, v, rcond=None)
             if verbose:
                 print("Precise basis vectors:")
@@ -1130,7 +1441,6 @@ def get_precise_shift_vector(
     final_lattice = generate_lattice(last_image.shape, direct_lattice_vectors,
                                      center_pix=offset_vector + get_shift(shift_vector, zPix - 1))
     closest_approach = 1e12
-    print(type(last_image.shape[0]))
     for p in final_lattice:
         dif = p - final_offset_vector
         distance_sq = (dif ** 2).sum()
@@ -1174,7 +1484,7 @@ def get_shift(shift_vector, frame_number):
 
 def spot_intensity_position(calibration_filename, background_filename, xPix, yPix, direct_lattice_vectors,
                             shift_vector, offset_vector, result_path, window_size=5, show_steps=False,
-                            display=False, ):
+                            display=False, verbose=True):
     """
     使用校准图像堆栈和一组无光照背景图像，校准每个光斑的强度。
     :param calibration_filename: 校准图像堆栈文件的路径
@@ -1213,10 +1523,12 @@ def spot_intensity_position(calibration_filename, background_filename, xPix, yPi
 
     if os.path.exists(calibration_intensities_name) and os.path.exists(background_name):
         # 若光斑强度文件和背景图像文件已存在，直接加载数据
-        print("\nIllumination intensity calibration already calculated.")
-        print("Loading", os.path.split(calibration_intensities_name)[1])
+        print("Illumination intensity calibration already calculated.")
+        if verbose:
+            print("Loading", os.path.split(calibration_intensities_name)[1])
         intensities_position = pickle.load(open(calibration_intensities_name, 'rb'))
-        print("Loading", os.path.split(background_name)[1])
+        if verbose:
+            print("Loading", os.path.split(background_name)[1])
         try:
             # 从文件中读取背景图像数据
             bg = load_image_data(background_name)
