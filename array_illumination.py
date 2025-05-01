@@ -6,6 +6,7 @@ from scipy.ndimage import gaussian_filter, median_filter, interpolation
 from scipy.signal.windows import hann, gaussian
 import cv2
 from datetime import datetime
+import utils
 
 
 def get_lattice_vectors(
@@ -27,9 +28,9 @@ def get_lattice_vectors(
         display=True,
         animate=False,  # 动画显示傅里叶空间的峰值寻找过程
         show_interpolation=False,
-        show_calibration_steps=True,
+        show_calibration_steps=False,
         show_lattice=False,
-        record_parameters=True):
+        record_parameters=False):
     """
     由校准图像计算出照明晶格参数（给定一个扫描场图像栈，找出照明晶格图案的基向量。）
 
@@ -63,19 +64,12 @@ def get_lattice_vectors(
         result_path = os.path.join(os.path.join(os.getcwd(), "result"), filename + timestamp)
         if not os.path.exists(result_path):
             os.makedirs(result_path)
-        print(f"result_path: {result_path}")
+        print(f"result_path: {result_path}\n")
 
-    _, calibration_all = cv2.imreadmulti(calibration, flags=cv2.IMREAD_UNCHANGED)
-    calibration_all = np.array(calibration_all)
-    # 如果三维堆栈是三通道的，转为灰度图
-    if len(calibration_all.shape) == 4:
-        grayscale_all = []
-        for i in range(calibration_all.shape[0]):
-            grayscale_all.append(cv2.cvtColor(calibration_all[i], cv2.COLOR_RGB2GRAY))
-        calibration_all = np.array(grayscale_all)
-    xPix, yPix, zPix = calibration_all.shape
+    calibration_all = load_image_data(calibration)
+    zPix, xPix, yPix = calibration_all.shape
 
-    print(" Detecting calibration illumination lattice parameters...")
+    print("Detecting calibration illumination lattice parameters...")
 
     # 粗略估计晶格向量
     fft_data_folder, fft_abs, fft_avg = get_fft_abs(calibration, calibration_all, result_path)  # DC term at center
@@ -193,13 +187,15 @@ def get_lattice_vectors(
         return direct_lattice_vectors, corrected_shift_vector, offset_vector
     else:
         # 校准图像光斑强度
-        intensities_vs_galvo_position, background_frame = spot_intensity_vs_galvo_position(calibration, background,
-                                                                                           xPix, yPix,
-                                                                                           direct_lattice_vectors,
-                                                                                           corrected_shift_vector,
-                                                                                           offset_vector,
-                                                                                           window_size=calibration_window_size,
-                                                                                           show_steps=show_calibration_steps)
+        intensities_vs_galvo_position, background_frame = spot_intensity_position(calibration, background,
+                                                                                  xPix, yPix,
+                                                                                  direct_lattice_vectors,
+                                                                                  corrected_shift_vector,
+                                                                                  offset_vector,
+                                                                                  window_size=calibration_window_size,
+                                                                                  show_steps=show_calibration_steps,
+                                                                                  display=False,
+                                                                                  result_path=result_path)
         return direct_lattice_vectors, corrected_shift_vector, offset_vector, intensities_vs_galvo_position, background_frame
 
 
@@ -293,12 +289,12 @@ def show_lattice_overlay_all(image_data, direct_lattice_vectors, offset_vector, 
         lattice_points = generate_lattice(
             show_me.shape, direct_lattice_vectors,
             center_pix=offset_vector + get_shift(shift_vector, s))
+        radius = dot_size // 2  # 计算半径
         for lp in lattice_points:
             x, y = np.round(lp).astype(int)
-            dots[x, y, 0::3] = 1
             # 根据 dot_size 调整点的大小，这里简单地复制点周围的像素来增大点的视觉效果
-            for i in range(-dot_size, dot_size + 1):
-                for j in range(-dot_size, dot_size + 1):
+            for i in range(-radius, radius + 1):
+                for j in range(-radius, radius + 1):
                     new_x, new_y = x + i, y + j
                     if 0 <= new_x < show_me.shape[0] and 0 <= new_y < show_me.shape[1]:
                         dots[new_x, new_y, 0::3] = 1
@@ -1176,68 +1172,91 @@ def get_shift(shift_vector, frame_number):
         return frame_number * shift_vector
 
 
-def spot_intensity_vs_galvo_position(lake_filename, background_filename, xPix, yPix, direct_lattice_vectors,
-                                     shift_vector, offset_vector, window_size=5, show_steps=False, display=False):
-    """Calibrate how the intensity of each spot varies with galvo
-    position, using a fluorescent lake dataset and a stack of
-    light-free background images."""
+def spot_intensity_position(calibration_filename, background_filename, xPix, yPix, direct_lattice_vectors,
+                            shift_vector, offset_vector, result_path, window_size=5, show_steps=False,
+                            display=False, ):
+    """
+    使用校准图像堆栈和一组无光照背景图像，校准每个光斑的强度。
+    :param calibration_filename: 校准图像堆栈文件的路径
+    :param background_filename: 无光照背景图像堆栈文件的路径
+    :param xPix: 图像水平像素数
+    :param yPix: 图像垂直像素数
+    :param direct_lattice_vectors: 晶格向量
+    :param shift_vector: 位移向量
+    :param offset_vector: 偏移向量
+    :param result_path: 结果保存路径
+    :param window_size: 校准窗口大小，默认为 5
+    :param show_steps: 是否显示每一步的结果，默认为 False
+    :param display: 是否显示强度随帧号变化的曲线图，默认为 False
+    :return: 一个嵌套字典，记录每个光斑在不同帧的强度；背景图像
+    """
 
-    lake_basename = os.path.splitext(lake_filename)[0]
-    lake_intensities_name = lake_basename + '_spot_intensities.pkl'
-    background_basename = os.path.splitext(background_filename)[0]
-    background_name = background_basename + '_background_image.raw'
-    background_directory_name = os.path.dirname(background_basename)
+    # 生成存储光斑强度的文件名
+    calibration_basename = os.path.splitext(os.path.basename(calibration_filename))[0]
+    calibration_intensities_name = os.path.join(result_path, calibration_basename + '_spot_intensities.pkl')
 
+    # 获取背景文件名的基础部分，并生成背景结果图像和背景目录的名称
+    background_basename = os.path.splitext(os.path.basename(background_filename))[0]
+    background_name = os.path.join(result_path, background_basename + '_background_image.tif')
+    background_directory_name = os.path.dirname(background_filename)
+
+    # 获取hot_pixels，在背景目录中
     try:
-        hot_pixels = np.fromfile(
-            os.path.join(background_directory_name, 'hot_pixels.txt'), sep=', ')
+        hot_pixels = np.fromfile(os.path.join(background_directory_name, 'hot_pixels.txt'), sep=', ')
     except IOError:
-        skip_hot_pix = input("Hot pixel list not found. Continue? [y]/n:")
-        if skip_hot_pix == 'n':
-            raise
-        else:
-            hot_pixels = None
+        # 若热点像素文件不存在，默认继续
+        print("\nHot pixel list not found.")
+        hot_pixels = None
     else:
+        # 成功读取热点像素信息，将其重塑为 2 行的数组
         hot_pixels = hot_pixels.reshape(2, len(hot_pixels) // 2)
 
-    if os.path.exists(lake_intensities_name) and os.path.exists(background_name):
+    if os.path.exists(calibration_intensities_name) and os.path.exists(background_name):
+        # 若光斑强度文件和背景图像文件已存在，直接加载数据
         print("\nIllumination intensity calibration already calculated.")
-        print("Loading", os.path.split(lake_intensities_name)[1])
-        intensities_vs_galvo_position = pickle.load(open(lake_intensities_name, 'rb'))
+        print("Loading", os.path.split(calibration_intensities_name)[1])
+        intensities_position = pickle.load(open(calibration_intensities_name, 'rb'))
         print("Loading", os.path.split(background_name)[1])
         try:
-            bg = np.fromfile(background_name, dtype=float).reshape(xPix, yPix)
+            # 从文件中读取背景图像数据
+            bg = load_image_data(background_name)
         except ValueError:
             print("\n\nWARNING: the data file:")
             print(background_name)
             print("may not be the size it was expected to be.\n\n")
             raise
     else:
+        # 若文件不存在，重新计算光斑强度和背景图像
         print("\nCalculating illumination spot intensities...")
         print("Constructing background image...")
+
+        # 加载背景堆栈，计算平均值，然后释放内存
         background_image_data = load_image_data(background_filename)
-        bg = np.zeros((xPix, yPix), dtype=float)
-        for z in range(background_image_data.shape[0]):
-            bg += background_image_data[z, :, :]
-        bg *= 1.0 / background_image_data.shape[0]
+        bg = np.mean(background_image_data, axis=0)
         del background_image_data
+
+        # 若存在热点像素信息，用3*3窗口中值滤波
         if hot_pixels is not None:
             bg = remove_hot_pixels(bg, hot_pixels)
         print("Background image complete.")
 
-        lake_image_data = load_image_data(lake_filename)
-        intensities_vs_galvo_position = {}
-        """A dict of dicts. Element [i, j][z] gives the intensity of the
-        i'th, j'th spot in the lattice, in frame z"""
+        # 光斑强度字典：元素 [i, j][z] 表示晶格中第 （i,j) 个光斑在第 z 帧中的强度
+        calibration_image_data = load_image_data(calibration_filename)
+        intensities_position = {}
+
         if show_steps:
             plt.figure()
         print("Computing flat-field calibration...")
-        for z in range(lake_image_data.shape[0]):
-            im = np.array(lake_image_data[z, :, :], dtype=float)
+        # 遍历校准图像的每一帧
+        for z in range(calibration_image_data.shape[0]):
+            im = np.array(calibration_image_data[z, :, :], dtype=float)
             if hot_pixels is not None:
+                # 若存在hot_pixel信息，处理
                 im = remove_hot_pixels(im, hot_pixels)
+            # 打印当前正在处理的校准图像帧号
             sys.stdout.write("\rCalibration image %i" % z)
             sys.stdout.flush()
+            # 生成晶格点及其对应的索引
             lattice_points, i_list, j_list = generate_lattice(
                 image_shape=(xPix, yPix),
                 lattice_vectors=direct_lattice_vectors,
@@ -1245,43 +1264,49 @@ def spot_intensity_vs_galvo_position(lake_filename, background_filename, xPix, y
                 edge_buffer=window_size + 1,
                 return_i_j=True)
 
+            # 遍历每个晶格点
             for m, lp in enumerate(lattice_points):
                 i, j = int(i_list[m]), int(j_list[m])
-                intensity_history = intensities_vs_galvo_position.setdefault((i, j), {})  # Get this spot's history
-                spot_image = get_centered_subimage(
-                    center_point=lp, window_size=window_size,
-                    image=im, background=bg)
-                intensity_history[z] = float(spot_image.sum())  # Funny thing...
+                # 获取当前光斑的强度历史记录，若不存在则创建一个新的字典
+                intensity_history = intensities_position.setdefault((i, j), {})
+                # 获取以当前晶格点为中心的子图像，计算强度之和
+                spot_image = get_centered_subimage(center_point=lp, window_size=window_size, image=im, background=bg)
+                intensity_history[z] = float(spot_image.sum())
                 if show_steps:
+                    # 若需要显示每一步的结果，显示当前光斑的子图像
                     plt.clf()
                     plt.imshow(spot_image, interpolation='nearest', cmap="gray")
                     plt.title("Spot %i, %i in frame %i\nCentered at %0.2f, %0.2f" % (i, j, z, lp[0], lp[1]))
                     plt.show()
                     response = input()
                     if response == 'q' or response == 'e' or response == 'x':
+                        # 用户选择退出，停止显示每一步的结果
                         print("Done showing steps...")
                         show_steps = False
 
-        """Normalize the intensity values"""
+        # 归一化强度值（打断点，想看看intensities_position长啥样，是不是嵌套字典）
         num_entries = 0
         total_sum = 0
-        for hist in intensities_vs_galvo_position.values():
+        for hist in intensities_position.values():
             for intensity in hist.values():
                 num_entries += 1
                 total_sum += intensity
         inverse_avg = num_entries * 1.0 / total_sum
-        for hist in intensities_vs_galvo_position.values():
+        for hist in intensities_position.values():
             for k in hist.keys():
                 hist[k] *= inverse_avg
-        print("\nSaving", os.path.split(lake_intensities_name)[1])
-        pickle.dump(intensities_vs_galvo_position, open(lake_intensities_name, 'wb'), protocol=2)
-        print("Saving", os.path.split(background_name)[1])
-        bg.tofile(background_name)
 
+        # 保存强度字典
+        print("\nSaving", os.path.split(calibration_intensities_name)[1])
+        pickle.dump(intensities_position, open(calibration_intensities_name, 'wb'), protocol=2)
+        print("Saving", os.path.split(background_name)[1])
+        utils.save_tiff_2d(background_name, bg)
+
+    # 展示
     if display:
         plt.figure()
         num_lines = 0
-        for (i, j), spot_hist in intensities_vs_galvo_position.items()[:10]:
+        for (i, j), spot_hist in intensities_position.items()[:10]:
             num_lines += 1
             sh = spot_hist.items()
             plt.plot([frame_num for frame_num, junk in sh],
@@ -1290,10 +1315,44 @@ def spot_intensity_vs_galvo_position(lake_filename, background_filename, xPix, y
                      label=repr((i, j)))
         plt.legend()
         plt.show()
-    return intensities_vs_galvo_position, bg  # bg is short for 'background'
+
+    return intensities_position, bg  # bg is short for 'background'
 
 
 def load_image_data(filename):
-    """Load the 16-bit raw data from the Visitech Infinity"""
+    """
+    加载图像三维堆栈
+    :param filename:
+    :return:
+    """
     _, image = cv2.imreadmulti(filename, flags=cv2.IMREAD_UNCHANGED)
     image = np.array(image)
+
+    # 如果三维堆栈是三通道的，转为灰度图
+    if len(image.shape) == 4:
+        grayscale_all = []
+        for i in range(image.shape[0]):
+            grayscale_all.append(cv2.cvtColor(image[i], cv2.COLOR_RGB2GRAY))
+        image = np.array(grayscale_all)
+    return image
+
+
+def remove_hot_pixels(image, hot_pixels):
+    """
+    移除图像中的 hot_pixels，用中值滤波，窗口大小3*3
+    :param image:
+    :param hot_pixels:
+    :return:
+    """
+    height, width = image.shape
+    for y, x in hot_pixels:
+        x = int(x)
+        y = int(y)
+        # 处理边界情况
+        x_min = max(0, x - 1)
+        x_max = min(height, x + 2)
+        y_min = max(0, y - 1)
+        y_max = min(width, y + 2)
+        neighborhood = image[x_min:x_max, y_min:y_max]
+        image[x, y] = np.median(neighborhood)
+    return image

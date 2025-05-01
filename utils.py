@@ -33,7 +33,7 @@ def create_2d_gaussian_kernel(kernel_size, sigma):
     # 对单位脉冲应用高斯滤波，得到高斯核
     gaussian_kernel = gaussian_filter(impulse, sigma)
 
-    gaussian_kernel/=np.sum(gaussian_kernel)
+    gaussian_kernel /= np.sum(gaussian_kernel)
 
     return gaussian_kernel
 
@@ -198,11 +198,12 @@ def save_tiff_3d(filename, img):
 
 
 def save_tiff_2d(filename, img):
-    img = np.uint16(img * 65535)
+    # img = np.uint16(img / img.max() * 65535)
     stat = cv2.imwrite(filename, img)
     if stat:
         print("Successfully save", filename, "!")
         return
+
 
 def get_circular_region_coordinates_numpy(center_x, center_y, radius, image_shape):
     """
