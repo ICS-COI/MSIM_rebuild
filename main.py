@@ -49,13 +49,20 @@ if __name__ == '__main__':
     calibration_filename = "data/20250505，first_test/5-36-lake.tiff"
     background_filename = "data/20250505，first_test/5-36-bg.tiff"
     data_filenames_list = ["data/20250505，first_test/5-36-lake.tiff",
-                           "data/20250505，first_test/5-36-bocai.tif",
+                           "data/20250505，first_test/5-36-bocai.tiff",
                            ]
 
+    extent = 6  # 寻找傅里叶尖峰时一个点的覆盖范围
+    num_spikes = 300  # 寻找傅里叶尖峰时的峰值数量
+    tolerance = 3.  # 傅里叶基向量所得晶格点与尖峰对应的容差
+    num_harmonics = 3  # 傅里叶基向量的最小阶数
+    show_ratio = 0.25  # 傅里叶图展示大小
+    low_pass_filter = 0.5
     scan_dimensions = (16, 14)
     steps = scan_dimensions[0] * scan_dimensions[1]
-    window_footprint = 45
-    aperture_size = 20
+    window_footprint = 30
+    aperture_size =10
+    dot_size_show=7
 
     filename = os.path.splitext(os.path.basename(calibration_filename))[0]
     # timestamp = datetime.now().strftime("_%Y%m%d_%H_%M_%S")
@@ -70,14 +77,14 @@ if __name__ == '__main__':
         background=background_filename,
         result_path=result_path,
         filename_list=data_filenames_list,
-        extent=6,  # 寻找傅里叶尖峰时一个点的覆盖范围
-        num_spikes=300,  # 寻找傅里叶尖峰时的峰值数量
-        tolerance=3.,  # 傅里叶基向量所得晶格点与尖峰对应的容差
-        num_harmonics=3,  # 傅里叶基向量的最小阶数
-        show_ratio=0.25,  # 傅里叶图展示大小
-        low_pass_filter=0.5,
+        extent=extent,  # 寻找傅里叶尖峰时一个点的覆盖范围
+        num_spikes=num_spikes,  # 寻找傅里叶尖峰时的峰值数量
+        tolerance=tolerance,  # 傅里叶基向量所得晶格点与尖峰对应的容差
+        num_harmonics=num_harmonics,  # 傅里叶基向量的最小阶数
+        show_ratio=show_ratio,  # 傅里叶图展示大小
+        low_pass_filter=low_pass_filter,
         scan_dimensions=scan_dimensions,
-        dot_size_show=10,
+        dot_size_show=dot_size_show,
         verbose=False,
         display=True,
         animate=False,  # 动画显示傅里叶空间的峰值寻找过程
