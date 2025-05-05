@@ -189,17 +189,17 @@ def get_lattice_vectors(
         return calibration_all.shape, direct_lattice_vectors, corrected_shift_vector, offset_vector
     else:
         # 校准图像光斑强度
-        intensities_vs_galvo_position, background_frame = spot_intensity_position(calibration, background,
-                                                                                  xPix, yPix,
-                                                                                  direct_lattice_vectors,
-                                                                                  corrected_shift_vector,
-                                                                                  offset_vector,
-                                                                                  window_size=calibration_window_size,
-                                                                                  show_steps=show_calibration_steps,
-                                                                                  display=False,
-                                                                                  verbose=verbose,
-                                                                                  result_path=result_path)
-        return calibration_all.shape, direct_lattice_vectors, corrected_shift_vector, offset_vector, intensities_vs_galvo_position, background_frame
+        intensities_position, background_frame = spot_intensity_position(calibration, background,
+                                                                         xPix, yPix,
+                                                                         direct_lattice_vectors,
+                                                                         corrected_shift_vector,
+                                                                         offset_vector,
+                                                                         window_size=calibration_window_size,
+                                                                         show_steps=show_calibration_steps,
+                                                                         display=False,
+                                                                         verbose=verbose,
+                                                                         result_path=result_path)
+        return calibration_all.shape, direct_lattice_vectors, corrected_shift_vector, offset_vector, intensities_position, background_frame
 
 
 def reconstruct_image_parallel(
@@ -207,13 +207,12 @@ def reconstruct_image_parallel(
         xPix, yPix, zPix, steps,
         lattice_vectors, offset_vector, shift_vector,
         new_grid_xrange, new_grid_yrange,
-        background_filename = None,
+        background_filename=None,
         result_path=None,
         num_processes=1,
         window_footprint=10,
         aperture_size=3,
         make_widefield_image=True,
-        make_confocal_image=False,  # Broken, for now
         verbose=True,
         show_steps=False,  # For debugging
         show_slices=False,  # For debugging
@@ -243,269 +242,320 @@ def reconstruct_image_parallel(
 
     if not cover and os.path.exists(reconstruct_image_name):
         print("\nImage already reconstructed.")
-        print("Loading", os.path.split(enderlein_image_name)[1])
+        print("Loading", os.path.split(reconstruct_image_name)[1])
         images = {}
-        try:
-            images['reconstruct_image'] = load_image_data(reconstruct_image_name)
-        except ValueError:
-            print("\n\nWARNING: the data file:")
-            print(enderlein_image_name)
-            print("may not be the size it was expected to be.\n\n")
-            raise
+        images['reconstruct_image'] = cv2.imread(reconstruct_image_name, cv2.IMREAD_UNCHANGED)
     else:
         start_time = time.perf_counter()
         if num_processes == 1:
-            images = enderlein_image_subprocess(**input_arguments)
-#         else:
-#             input_arguments['intermediate_data'] = False  # Difficult for parallel
-#             input_arguments['show_steps'] = False  # Difficult for parallel
-#             input_arguments['show_slices'] = False  # Difficult for parallel
-#             input_arguments['display'] = False  # Annoying for parallel
-#             input_arguments['verbose'] = False  # Annoying for parallel
-#
-#             step_boundaries = list(range(0, steps, 10)) + [steps]
-#             step_boundaries = [(step_boundaries[i], step_boundaries[i + 1] - 1) for i in
-#                                range(len(step_boundaries) - 1)]
-#             running_processes = {}
-#             first_harvest = True
-#             random_prefix = '%06i_' % (random.randint(0, 999999))
-#             while len(running_processes) > 0 or len(step_boundaries) > 0:
-#                 """Load up the subprocesses"""
-#                 while (len(running_processes) < num_processes and
-#                        len(step_boundaries) > 0):
-#                     sb = step_boundaries.pop(0)
-#                     input_arguments['start_frame'], input_arguments['end_frame'] = sb
-#                     output_filename = (random_prefix + '%i_%i_intermediate_data.temp' % sb)
-#                     sys.stdout.write("\rProcessing frames: " + repr(sb[0]) + '-' + repr(sb[1]) + ' ' * 10)
-#                     sys.stdout.flush()
-#                     command_string = """
-# import array_illumination, pickle
-# from numpy import array
-# input_arguments=%s
-# sub_images = array_illumination.enderlein_image_subprocess(**input_arguments)
-# pickle.dump(sub_images, open('%s', 'wb'), protocol=2)
-# """ % (repr(input_arguments), output_filename)
-#                     running_processes[output_filename] = subprocess.Popen(
-#                         [sys.executable, '-c %s' % command_string],
-#                         stdin=subprocess.PIPE,
-#                         stdout=subprocess.PIPE,
-#                         stderr=subprocess.PIPE)
-#                 """Poke each subprocess, harvest the finished ones"""
-#                 pop_me = []
-#                 for f, proc in running_processes.items():
-#                     if proc.poll() is not None:  # Time to harvest
-#                         pop_me.append(f)
-#                         report = proc.communicate()
-#                         if report != (b'', b''):
-#                             print(report)
-#                             raise UserWarning("Problem with a subprocess.")
-#                         sub_images = pickle.load(open(f, 'rb'))
-#                         os.remove(f)
-#
-#                         if first_harvest:
-#                             images = sub_images
-#                             first_harvest = False
-#                         else:
-#                             for k in images.keys():
-#                                 images[k] += sub_images[k]
-#                 for p in pop_me:  # Forget about the harvested processes
-#                     running_processes.pop(p)
-#                 """Chill for a second"""
-#                 time.sleep(0.2)
-#         end_time = time.perf_counter()
-#         print("Elapsed time: %0.2f seconds" % (end_time - start_time))
-#         images['enderlein_image'].tofile(enderlein_image_name)
-#         if make_widefield_image:
-#             images['widefield_image'].tofile(basename + '_widefield.raw')
-#         if make_confocal_image:
-#             images['confocal_image'].tofile(basename + '_confocal.raw')
-#     display = True
-#     if display:
-#         plt.figure()
-#         plt.imshow(images['enderlein_image'], interpolation='nearest', cmap="gray")
-#         plt.colorbar()
-#         plt.show()
-#     return images
+            images = reconstruct_image_subprocess(**input_arguments)
+        else:
+            input_arguments['intermediate_data'] = False  # Difficult for parallel
+            input_arguments['show_steps'] = False  # Difficult for parallel
+            input_arguments['show_slices'] = False  # Difficult for parallel
+            input_arguments['display'] = False  # Annoying for parallel
+            input_arguments['verbose'] = False  # Annoying for parallel
 
-def enderlein_image_subprocess(
-        data_filename, lake_filename, background_filename,
-        xPix, yPix, zPix, steps, preframes,
+            step_boundaries = list(range(0, steps, 10)) + [steps]
+            step_boundaries = [(step_boundaries[i], step_boundaries[i + 1] - 1) for i in
+                               range(len(step_boundaries) - 1)]
+            running_processes = {}
+            first_harvest = True
+            random_prefix = '%06i_' % (random.randint(0, 999999))
+            while len(running_processes) > 0 or len(step_boundaries) > 0:
+                """Load up the subprocesses"""
+                while (len(running_processes) < num_processes and
+                       len(step_boundaries) > 0):
+                    sb = step_boundaries.pop(0)
+                    input_arguments['start_frame'], input_arguments['end_frame'] = sb
+                    output_filename = (random_prefix + '%i_%i_intermediate_data.temp' % sb)
+                    sys.stdout.write("\rProcessing frames: " + repr(sb[0]) + '-' + repr(sb[1]) + ' ' * 10)
+                    sys.stdout.flush()
+                    command_string = """
+import array_illumination, pickle
+from numpy import array
+input_arguments=%s
+sub_images = array_illumination.reconstruct_image_subprocess(**input_arguments)
+pickle.dump(sub_images, open('%s', 'wb'), protocol=2)
+""" % (repr(input_arguments), output_filename)
+                    running_processes[output_filename] = subprocess.Popen(
+                        [sys.executable, '-c %s' % command_string],
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE)
+                """Poke each subprocess, harvest the finished ones"""
+                pop_me = []
+                for f, proc in running_processes.items():
+                    if proc.poll() is not None:  # Time to harvest
+                        pop_me.append(f)
+                        report = proc.communicate()
+                        if report != (b'', b''):
+                            print(report)
+                            raise UserWarning("Problem with a subprocess.")
+                        sub_images = pickle.load(open(f, 'rb'))
+                        os.remove(f)
+
+                        if first_harvest:
+                            images = sub_images
+                            first_harvest = False
+                        else:
+                            for k in images.keys():
+                                images[k] += sub_images[k]
+                for p in pop_me:  # Forget about the harvested processes
+                    running_processes.pop(p)
+                """Chill for a second"""
+                time.sleep(0.2)
+        end_time = time.perf_counter()
+        print("Elapsed time: %0.2f seconds" % (end_time - start_time))
+        utils.save_tiff_2d(reconstruct_image_name, images['reconstruct_image'])
+        if make_widefield_image:
+            utils.save_tiff_2d(reconstruct_image_name.replace("reconstruct","widefield"), images['widefield_image'])
+
+    if display:
+        plt.figure(figsize=(12, 6) if make_widefield_image else (6, 6))
+        plt.subplot(1, 2, 1) if make_widefield_image else plt.subplot(1, 1, 1)
+        plt.imshow(images['reconstruct_image'], interpolation='nearest', cmap="gray")
+        plt.title("Reconstructed Image")
+        plt.colorbar()
+
+        if make_widefield_image:
+            plt.subplot(1, 2, 2)
+            plt.imshow(images['widefield_image'], interpolation='nearest', cmap="gray")
+            plt.title("Widefield Image")
+            plt.colorbar()
+        plt.show()
+    return images
+
+def reconstruct_image_subprocess(
+        data_filename, calibration_filename,
+        xPix, yPix, zPix, steps,
         lattice_vectors, offset_vector, shift_vector,
         new_grid_xrange, new_grid_yrange,
-        start_frame=None, end_frame=None,
+        background_filename=None,
+        result_path=None,
+        start_frame=None, end_frame=None,  # ?
         window_footprint=10,
         aperture_size=3,
         make_widefield_image=True,
-        make_confocal_image=False,  # Broken, for now
         verbose=True,
         show_steps=False,  # For debugging
         show_slices=False,  # For debugging
         intermediate_data=False,  # Memory hog, for stupid reasons. Leave 'False'
         normalize=False,  # Of uncertain merit, leave 'False' probably
         display=False,
+        cover=False,
 ):
-    basename = os.path.splitext(data_filename)[0]
-#     enderlein_image_name = basename + '_enderlein_image.raw'
-#     lake_basename = os.path.splitext(lake_filename)[0]
-#     lake_intensities_name = lake_basename + '_spot_intensities.pkl'
-#     background_basename = os.path.splitext(background_filename)[0]
-#     background_name = background_basename + '_background_image.raw'
-#
-#     intensities_vs_galvo_position = pickle.load(open(lake_intensities_name, 'rb'))
-#     background_directory_name = os.path.dirname(background_name)
-#     try:
-#         background_frame = np.fromfile(background_name).reshape(xPix, yPix).astype(float)
-#     except ValueError:
-#         print("\n\nWARNING: the data file:")
-#         print(background_name)
-#         print("may not be the size it was expected to be.\n\n")
-#         raise
-#     try:
-#         hot_pixels = np.fromfile(os.path.join(background_directory_name, 'hot_pixels.txt'), sep=', ')
-#     except:
-#         hot_pixels = None
-#
-#     else:
-#         hot_pixels = hot_pixels.reshape(2, len(hot_pixels) // 2)
-#
-#     if show_steps or show_slices: fig = plt.figure()
-#     if start_frame is None:
-#         start_frame = 0
-#     if end_frame is None:
-#         end_frame = steps - 1
-#     new_grid_x = np.linspace(*new_grid_xrange)
-#     new_grid_y = np.linspace(*new_grid_yrange)
-#     enderlein_image = np.zeros((new_grid_x.shape[0], new_grid_y.shape[0]), dtype=np.float64)
-#     enderlein_normalization = np.zeros_like(enderlein_image)
-#     this_frames_enderlein_image = np.zeros_like(enderlein_image)
-#     this_frames_normalization = np.zeros_like(enderlein_image)
-#     if intermediate_data:
-#         cumulative_sum = np.memmap(
-#             basename + '_cumsum.raw', dtype=float, mode='w+',
-#             shape=(steps,) + enderlein_image.shape)
-#         processed_frames = np.memmap(
-#             basename + '_frames.raw', dtype=float, mode='w+',
-#             shape=(steps,) + enderlein_image.shape)
-#     if make_widefield_image:
-#         widefield_image = np.zeros_like(enderlein_image)
-#         widefield_coordinates = np.meshgrid(new_grid_x, new_grid_y)
-#         widefield_coordinates = (
-#             widefield_coordinates[0].reshape(
-#                 new_grid_x.shape[0] * new_grid_y.shape[0]),
-#             widefield_coordinates[1].reshape(
-#                 new_grid_x.shape[0] * new_grid_y.shape[0]))
-#     if make_confocal_image:
-#         confocal_image = np.zeros_like(enderlein_image)
-#     enderlein_normalization.fill(1e-12)
-#     aperture = gaussian(2 * window_footprint + 1, std=aperture_size
-#                         ).reshape(2 * window_footprint + 1, 1)
-#     aperture = aperture * aperture.T
-#     grid_step_x = new_grid_x[1] - new_grid_x[0]
-#     grid_step_y = new_grid_y[1] - new_grid_y[0]
-#     subgrid_footprint = np.floor(
-#         (-1 + window_footprint * 0.5 / grid_step_x,
-#          -1 + window_footprint * 0.5 / grid_step_y))
-#     subgrid = (  # Add 2*(r_0 - r_M) to this to get s_desired
-#         window_footprint + 2 * grid_step_x * np.arange(
-#             -subgrid_footprint[0], subgrid_footprint[0] + 1),
-#         window_footprint + 2 * grid_step_y * np.arange(
-#             -subgrid_footprint[1], subgrid_footprint[1] + 1))
-#     subgrid_points = ((2 * subgrid_footprint[0] + 1) *
-#                       (2 * subgrid_footprint[1] + 1))
-#     for z in range(start_frame, end_frame + 1):
-#         im = load_image_slice(
-#             filename=data_filename, xPix=xPix, yPix=yPix,
-#             preframes=preframes, which_slice=z).astype(float)
-#         if hot_pixels is not None:
-#             im = remove_hot_pixels(im, hot_pixels)
-#         this_frames_enderlein_image.fill(0.)
-#         this_frames_normalization.fill(1e-12)
-#         if verbose:
-#             sys.stdout.write("\rProcessing raw data image %i" % (z))
-#             sys.stdout.flush()
-#         if make_widefield_image:
-#             widefield_image += interpolation.map_coordinates(im, widefield_coordinates).reshape(new_grid_y.shape[0],
-#                                                                                                 new_grid_x.shape[0]).T
-#         lattice_points, i_list, j_list = (generate_lattice(image_shape=(xPix, yPix), lattice_vectors=lattice_vectors,
-#                                                            center_pix=offset_vector + get_shift(shift_vector, z),
-#                                                            edge_buffer=window_footprint + 1, return_i_j=True))
-#         for m, lp in enumerate(lattice_points):
-#             i, j = int(i_list[m]), int(j_list[m])
-#             """Take an image centered on each illumination point"""
-#             spot_image = get_centered_subimage(center_point=lp, window_size=window_footprint, image=im,
-#                                                background=background_frame)
-#             """Aperture the image with a synthetic pinhole"""
-#             intensity_normalization = 1.0 / (intensities_vs_galvo_position.get((i, j), {}).get(z, np.inf))
-#             if (intensity_normalization == 0 or spot_image.shape != (
-#                     2 * window_footprint + 1, 2 * window_footprint + 1)):
-#                 continue  # Skip to the next spot
-#             apertured_image = (aperture * spot_image * intensity_normalization)
-#             nearest_grid_index = np.round((lp - (new_grid_x[0], new_grid_y[0])) / (grid_step_x, grid_step_y))
-#             nearest_grid_point = ((new_grid_x[0], new_grid_y[0]) + (grid_step_x, grid_step_y) * nearest_grid_index)
-#             new_coordinates = np.meshgrid(subgrid[0] + 2 * (nearest_grid_point[0] - lp[0]),
-#                                           subgrid[1] + 2 * (nearest_grid_point[1] - lp[1]))
-#             resampled_image = interpolation.map_coordinates(apertured_image, (
-#                 new_coordinates[0].reshape(int(subgrid_points)),
-#                 new_coordinates[1].reshape(int(subgrid_points)))).reshape(int(2 * subgrid_footprint[1] + 1),
-#                                                                           int(2 * subgrid_footprint[0] + 1)).T
-#             """Add the recentered image back to the scan grid"""
-#             if intensity_normalization > 0:
-#                 this_frames_enderlein_image[
-#                 int(nearest_grid_index[0] - subgrid_footprint[0]):int(nearest_grid_index[0] + subgrid_footprint[0] + 1),
-#                 int(nearest_grid_index[1] - subgrid_footprint[1]):int(nearest_grid_index[1] + subgrid_footprint[1] + 1),
-#                 ] += resampled_image
-#                 this_frames_normalization[
-#                 int(nearest_grid_index[0] - subgrid_footprint[0]):int(nearest_grid_index[0] + subgrid_footprint[0] + 1),
-#                 int(nearest_grid_index[1] - subgrid_footprint[1]):int(nearest_grid_index[1] + subgrid_footprint[1] + 1),
-#                 ] += 1
-#                 if make_confocal_image:  # FIXME!!!!!!!
-#                     confocal_image[
-#                     nearest_grid_index[0] - window_footprint:nearest_grid_index[0] + window_footprint + 1,
-#                     nearest_grid_index[1] - window_footprint:nearest_grid_index[1] + window_footprint + 1
-#                     ] += interpolation.shift(
-#                         apertured_image, shift=(lp - nearest_grid_point))
-#             if show_steps:
-#                 plt.clf()
-#                 plt.suptitle(
-#                     "Spot %i, %i in frame %i\nCentered at %0.2f, %0.2f\n" % (i, j, z, lp[0], lp[1]) + (
-#                             "Nearest grid point: %i, %i" % (nearest_grid_point[0], nearest_grid_point[1])))
-#                 plt.subplot(1, 3, 1)
-#                 plt.imshow(
-#                     spot_image, interpolation='nearest', cmap="gray")
-#                 plt.subplot(1, 3, 2)
-#                 plt.imshow(apertured_image, interpolation='nearest', cmap="gray")
-#                 plt.subplot(1, 3, 3)
-#                 plt.imshow(resampled_image, interpolation='nearest', cmap="gray")
-#                 fig.show()
-#                 fig.canvas.draw()
-#                 response = input('\nHit enter to continue, q to quit:')
-#                 if response == 'q' or response == 'e' or response == 'x':
-#                     print("Done showing steps...")
-#                     show_steps = False
-#         enderlein_image += this_frames_enderlein_image
-#         enderlein_normalization += this_frames_normalization
-#         if not normalize:
-#             enderlein_normalization.fill(1)
-#             this_frames_normalization.fill(1)
-#         if intermediate_data:
-#             cumulative_sum[z, :, :] = (enderlein_image * 1. / enderlein_normalization)
-#             cumulative_sum.flush()
-#             processed_frames[z, :, :] = this_frames_enderlein_image * 1. / (this_frames_normalization)
-#             processed_frames.flush()
-#         if show_slices:
-#             plt.clf()
-#             plt.imshow(enderlein_image * 1.0 / enderlein_normalization, cmap="gray", interpolation='nearest')
-#             fig.show()
-#             fig.canvas.draw()
-#             response = input('Hit enter to continue...')
-#
-#     images = {}
-#     images['enderlein_image'] = (enderlein_image * 1.0 / enderlein_normalization)
-#     if make_widefield_image:
-#         images['widefield_image'] = widefield_image
-#     if make_confocal_image:
-#         images['confocal_image'] = confocal_image
-#     return images
+    basename = os.path.splitext(os.path.basename(data_filename))[0]  # 去掉文件扩展名，只取文件名部分
+    reconstruct_image_name = os.path.join(result_path, basename + '_reconstruct.tif')
+    calibration_basename = os.path.splitext(os.path.basename(calibration_filename))[0]
+    calibration_intensities_name = os.path.join(result_path, calibration_basename + '_spot_intensities.pkl')
+    hot_pixels = None
+    if background_filename is not None:
+        background_basename = os.path.splitext(os.path.basename(background_filename))[0]
+        background_name = os.path.join(result_path, background_basename + '_background_image.tif')
+
+        intensities_position = pickle.load(open(calibration_intensities_name, 'rb'))
+        background_directory_name = os.path.dirname(background_filename)
+
+        background_frame = cv2.imread(background_name, cv2.IMREAD_UNCHANGED)
+        try:
+            hot_pixels = np.fromfile(os.path.join(background_directory_name, 'hot_pixels.txt'), sep=', ')
+        except:
+            hot_pixels = None
+        else:
+            hot_pixels = hot_pixels.reshape(2, len(hot_pixels) // 2)
+
+    if show_steps or show_slices: plt.figure()
+
+    # 针对多线程，单线程就是一个堆栈中的全部图像
+    if start_frame is None:
+        start_frame = 0
+    if end_frame is None:
+        end_frame = steps - 1
+
+    # 两倍大小的图像
+    new_grid_x = np.linspace(*new_grid_xrange)
+    new_grid_y = np.linspace(*new_grid_yrange)
+    reconstruct_image = np.zeros((new_grid_x.shape[0], new_grid_y.shape[0]), dtype=np.float64)
+    reconstruct_normalization = np.zeros_like(reconstruct_image)
+    this_frames_reconstruct_image = np.zeros_like(reconstruct_image)
+    this_frames_normalization = np.zeros_like(reconstruct_image)
+
+    # if intermediate_data:
+    #     cumulative_sum = np.memmap(
+    #         basename + '_cumsum.raw', dtype=float, mode='w+',
+    #         shape=(steps,) + reconstruct_image.shape)
+    #     processed_frames = np.memmap(
+    #         basename + '_frames.raw', dtype=float, mode='w+',
+    #         shape=(steps,) + reconstruct_image.shape)
+
+    # 原始图像两倍大小的宽场图像
+    if make_widefield_image:
+        widefield_image = np.zeros_like(reconstruct_image)
+        widefield_coordinates = np.meshgrid(new_grid_x, new_grid_y)
+        widefield_coordinates = (widefield_coordinates[0].reshape(new_grid_x.shape[0] * new_grid_y.shape[0]),
+                                 widefield_coordinates[1].reshape(new_grid_x.shape[0] * new_grid_y.shape[0]))
+
+    reconstruct_normalization.fill(1e-12)
+    # 生成一个窗口大小的二维高斯分布，作为数字针孔
+    aperture = gaussian(2 * window_footprint + 1, std=aperture_size).reshape(2 * window_footprint + 1, 1)
+    aperture = aperture * aperture.T
+
+    # 步距
+    grid_step_x = new_grid_x[1] - new_grid_x[0]
+    grid_step_y = new_grid_y[1] - new_grid_y[0]
+    # 子网格范围？
+    subgrid_footprint = np.floor((-1 + window_footprint * 0.5 / grid_step_x, -1 + window_footprint * 0.5 / grid_step_y))
+    # Add 2*(r_0 - r_M) to this to get s_desired 子网格坐标范围？
+    subgrid = (window_footprint + 2 * grid_step_x * np.arange(-subgrid_footprint[0], subgrid_footprint[0] + 1),
+               window_footprint + 2 * grid_step_y * np.arange(-subgrid_footprint[1], subgrid_footprint[1] + 1))
+    subgrid_points = ((2 * subgrid_footprint[0] + 1) * (2 * subgrid_footprint[1] + 1))
+
+    image_data = load_image_data(data_filename)
+    # show = True
+
+    for z in range(start_frame, end_frame + 1):
+        im = np.float64(image_data[z])
+        if hot_pixels is not None:
+            im = remove_hot_pixels(im, hot_pixels)
+        this_frames_reconstruct_image.fill(0.)
+        this_frames_normalization.fill(1e-12)
+        if verbose:
+            sys.stdout.write("\rProcessing raw data image %i" % (z))
+            sys.stdout.flush()
+        if make_widefield_image:
+            # scipy.ndimage 包，将图像 im 的像素值按照 widefield_coordinates 中的坐标进行插值，并将结果累加到 widefield_image 中
+            widefield_image += interpolation.map_coordinates(im, widefield_coordinates).reshape(new_grid_y.shape[0],
+                                                                                                new_grid_x.shape[0]).T
+        lattice_points, i_list, j_list = generate_lattice(image_shape=(xPix, yPix), lattice_vectors=lattice_vectors,
+                                                          center_pix=offset_vector + get_shift(shift_vector, z),
+                                                          edge_buffer=window_footprint + 1, return_i_j=True)
+        for m, lp in enumerate(lattice_points):
+            i, j = int(i_list[m]), int(j_list[m])  # i,j 可以指示之前生成的晶格点强度矫正
+            # 晶格点周围的子图像
+            if background_filename is not None:
+                spot_image = get_centered_subimage(center_point=lp, window_size=window_footprint, image=im,
+                                                   background=background_frame)
+            else:
+                spot_image = get_centered_subimage(center_point=lp, window_size=window_footprint, image=im)
+
+            # if show_steps and show:
+            #     # 展示子图像
+            #     plt.imshow(spot_image, cmap='gray', interpolation='nearest')
+            #     plt.title(f"Spot Image {m + 1}")
+            #     plt.colorbar()
+            #     plt.show()
+            #
+            #     # 询问是否继续
+            #     response = input()
+            #     if response.lower() == 'n':
+            #         print("展示已终止。")
+            #         show = False
+
+            # 数字针孔处理，数字针孔*子图像*强度校正
+            intensity_normalization = 1.0 / (intensities_position.get((i, j), {}).get(z, np.inf))
+            if intensity_normalization == 0 or spot_image.shape != (
+                    2 * window_footprint + 1, 2 * window_footprint + 1):
+                continue  # 跳过无效光斑（强度无效或尺寸无效）
+            apertured_image = aperture * spot_image * intensity_normalization
+            # 与晶格位置最近的子网格的网格坐标、网格点
+            nearest_grid_index = np.round((lp - (new_grid_x[0], new_grid_y[0])) / (grid_step_x, grid_step_y))
+            nearest_grid_point = ((new_grid_x[0], new_grid_y[0]) + (grid_step_x, grid_step_y) * nearest_grid_index)
+            new_coordinates = np.meshgrid(subgrid[0] + 2 * (nearest_grid_point[0] - lp[0]),
+                                          subgrid[1] + 2 * (nearest_grid_point[1] - lp[1]))
+            # 找到在子网格下经过数字针孔处理的子图像（插值），但是是原尺寸，没有变成两倍的坐标
+            resampled_image = interpolation.map_coordinates(apertured_image,
+                                                            (new_coordinates[0].reshape(int(subgrid_points)),
+                                                             new_coordinates[1].reshape(int(subgrid_points)))).reshape(
+                int(2 * subgrid_footprint[1] + 1), int(2 * subgrid_footprint[0] + 1)).T
+
+            # 将子图像添加到重建图像中
+            if intensity_normalization > 0:
+                this_frames_reconstruct_image[
+                int(nearest_grid_index[0] - subgrid_footprint[0]):int(nearest_grid_index[0] + subgrid_footprint[0] + 1),
+                int(nearest_grid_index[1] - subgrid_footprint[1]):int(nearest_grid_index[1] + subgrid_footprint[1] + 1),
+                ] += resampled_image
+                this_frames_normalization[
+                int(nearest_grid_index[0] - subgrid_footprint[0]):int(nearest_grid_index[0] + subgrid_footprint[0] + 1),
+                int(nearest_grid_index[1] - subgrid_footprint[1]):int(nearest_grid_index[1] + subgrid_footprint[1] + 1),
+                ] += 1
+
+            if show_steps:
+                plt.clf()
+                plt.suptitle(
+                    "Spot %i, %i in frame %i\nCentered at %0.2f, %0.2f\n" % (i, j, z, lp[0], lp[1]) + (
+                            "Nearest grid point: %i, %i" % (nearest_grid_point[0], nearest_grid_point[1])))
+                plt.subplot(1, 4, 1)
+                plt.imshow(spot_image, interpolation='nearest', cmap="gray")
+                plt.title("Spot Image")
+                plt.subplot(1, 4, 2)
+                plt.imshow(apertured_image, interpolation='nearest', cmap="gray")
+                plt.title("Apertured Image")
+                plt.subplot(1, 4, 3)
+                plt.imshow(resampled_image, interpolation='nearest', cmap="gray")
+                plt.title("Resampled Image")
+                plt.subplot(1, 4, 4)
+                plt.imshow(this_frames_reconstruct_image, interpolation='nearest', cmap="gray")
+                plt.title("Reconstructed Frame")
+                plt.show()
+                response = input('\nHit enter to continue, q to quit:')
+                if response == 'q' or response == 'e' or response == 'x':
+                    print("Done showing steps...")
+                    show_steps = False
+
+        reconstruct_image += this_frames_reconstruct_image
+        reconstruct_normalization += this_frames_normalization
+
+        if not normalize:
+            reconstruct_normalization.fill(1)
+            this_frames_normalization.fill(1)
+
+        if show_slices:
+            plt.figure(figsize=(18, 6))
+            plt.subplot(1, 3, 1)
+            plt.imshow(reconstruct_image, interpolation='nearest', cmap="gray")
+            plt.title("Reconstructed Image")
+            plt.colorbar()
+            plt.subplot(1, 3, 2)
+            plt.imshow(reconstruct_normalization, interpolation='nearest', cmap="gray")
+            plt.title("Reconstruction Normalization")
+            plt.colorbar()
+            plt.subplot(1, 3, 3)
+            plt.imshow(reconstruct_image * 1.0 / reconstruct_normalization, cmap="gray", interpolation='nearest')
+            plt.title("Normalized Reconstructed Image")
+            plt.colorbar()
+            plt.show()
+            response = input('\nHit enter to continue, q/e/x to quit:')
+            if response in ['q', 'e', 'x']:
+                print("Done showing slices...")
+                show_slices = False
+
+    # 释放画图内存
+    if show_steps or show_slices:
+        plt.close('all')
+        import gc
+        gc.collect()
+
+    images = {}
+    images['reconstruct_image'] = (reconstruct_image * 1.0 / reconstruct_normalization)
+    if make_widefield_image:
+        images['widefield_image'] = widefield_image
+
+    # if display:
+    #     plt.figure(figsize=(12, 6) if make_widefield_image else (6, 6))
+    #     plt.subplot(1, 2, 1) if make_widefield_image else plt.subplot(1, 1, 1)
+    #     plt.imshow(images['reconstruct_image'], interpolation='nearest', cmap="gray")
+    #     plt.title("Reconstructed Image")
+    #     plt.colorbar()
+    #
+    #     if make_widefield_image:
+    #         plt.subplot(1, 2, 2)
+    #         plt.imshow(images['widefield_image'], interpolation='nearest', cmap="gray")
+    #         plt.title("Widefield Image")
+    #         plt.colorbar()
+    #     plt.show()
+
+    return images
 
 
 # def show_lattice_overlay1(calibration_all, direct_lattice_vectors, verbose=False):
@@ -613,7 +663,7 @@ def show_lattice_overlay_all(image_data, direct_lattice_vectors, offset_vector, 
         plt.title("Red dots show the calculated illumination pattern")
         plt.show()
 
-        new_s = input("Next frame [exit]:")
+        new_s = input("\nNext frame [exit]:")
         if new_s == '':
             print("Exiting")
             break
@@ -1300,14 +1350,13 @@ def generate_lattice(image_shape, lattice_vectors, center_pix='image', edge_buff
         return lattice_points
 
 
-def get_centered_subimage(
-        center_point, window_size, image, background='none'):
+def get_centered_subimage(center_point, window_size, image, background=None):
     x, y = np.round(center_point).astype(int)
     xSl = slice(max(x - window_size - 1, 0), x + window_size + 2)
     ySl = slice(max(y - window_size - 1, 0), y + window_size + 2)
     subimage = np.array(image[xSl, ySl])
 
-    if not isinstance(background, str):
+    if background is not None:
         subimage -= background[xSl, ySl]
     interpolation.shift(subimage, shift=(x, y) - center_point, output=subimage)
     return subimage[1:-1, 1:-1]
