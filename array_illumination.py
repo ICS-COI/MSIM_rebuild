@@ -13,6 +13,7 @@ def get_lattice_vectors(
         calibration=None,
         background=None,
         result_path=None,
+        filename_list=None,
         extent=8,  # 寻找傅里叶尖峰时一个点的覆盖范围，需调整 8
         num_spikes=60,  # 寻找傅里叶尖峰时的峰值数量，需调整
         tolerance=3.,  # 傅里叶基向量所得晶格点与尖峰对应的容差
@@ -139,31 +140,29 @@ def get_lattice_vectors(
         calibration_all[-1, :, :], zPix, scan_type, verbose)
 
     if show_lattice:
-        show_lattice_overlay_all(calibration_all, direct_lattice_vectors, offset_vector, corrected_shift_vector,
-                                 dot_size=dot_size_show)
-
-        # which_filename = 0
-        # while True:
-        #     print("Displaying:", filename_list[which_filename])
-        #     image_data = load_image_data(filename_list[which_filename])
-        #     show_lattice_overlay_all(
-        #         image_data, direct_lattice_vectors,
-        #         offset_vector, corrected_shift_vector)
-        #     if len(filename_list) > 1:
-        #         which_filename = input(
-        #             "Display lattice overlay for which dataset? [done]:")
-        #         try:
-        #             which_filename = int(which_filename)
-        #         except ValueError:
-        #             if which_filename == '':
-        #                 print("Done displaying lattice overlay.")
-        #                 break
-        #             else:
-        #                 continue
-        #         if which_filename >= len(filename_list):
-        #             which_filename = len(filename_list) - 1
-        #     else:
-        #         break
+        # show_lattice_overlay_all(calibration_all, direct_lattice_vectors, offset_vector, corrected_shift_vector,
+        #                          dot_size=dot_size_show)
+        which_filename = 0
+        while True:
+            print("Displaying:", filename_list[which_filename])
+            image_data = load_image_data(filename_list[which_filename])
+            show_lattice_overlay_all(image_data, direct_lattice_vectors, offset_vector, corrected_shift_vector,
+                                     dot_size=dot_size_show)
+            if len(filename_list) > 1:
+                which_filename = input(
+                    "Display lattice overlay for which dataset? [done]:")
+                try:
+                    which_filename = int(which_filename)
+                except ValueError:
+                    if which_filename == '':
+                        print("Done displaying lattice overlay.")
+                        break
+                    else:
+                        continue
+                if which_filename >= len(filename_list):
+                    which_filename = len(filename_list) - 1
+            else:
+                break
 
     # 关闭所有的 matplotlib 图形窗口，并且调用 Python 的垃圾回收机制来释放不再使用的内存。
     if display or show_lattice:
@@ -309,7 +308,7 @@ pickle.dump(sub_images, open('%s', 'wb'), protocol=2)
         print("Elapsed time: %0.2f seconds" % (end_time - start_time))
         utils.save_tiff_2d(reconstruct_image_name, images['reconstruct_image'])
         if make_widefield_image:
-            utils.save_tiff_2d(reconstruct_image_name.replace("reconstruct","widefield"), images['widefield_image'])
+            utils.save_tiff_2d(reconstruct_image_name.replace("reconstruct", "widefield"), images['widefield_image'])
 
     if display:
         plt.figure(figsize=(12, 6) if make_widefield_image else (6, 6))
@@ -325,6 +324,7 @@ pickle.dump(sub_images, open('%s', 'wb'), protocol=2)
             plt.colorbar()
         plt.show()
     return images
+
 
 def reconstruct_image_subprocess(
         data_filename, calibration_filename,

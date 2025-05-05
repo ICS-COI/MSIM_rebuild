@@ -69,6 +69,7 @@ if __name__ == '__main__':
         calibration=calibration_filename,
         background=background_filename,
         result_path=result_path,
+        filename_list=data_filenames_list,
         extent=6,  # 寻找傅里叶尖峰时一个点的覆盖范围
         num_spikes=300,  # 寻找傅里叶尖峰时的峰值数量
         tolerance=3.,  # 傅里叶基向量所得晶格点与尖峰对应的容差
@@ -79,7 +80,7 @@ if __name__ == '__main__':
         dot_size_show=10,
         verbose=False,
         display=True,
-        animate=True,  # 动画显示傅里叶空间的峰值寻找过程
+        animate=False,  # 动画显示傅里叶空间的峰值寻找过程
         show_interpolation=False,  # 滤波的中间过程
         show_lattice=True,
         record_parameters=True
