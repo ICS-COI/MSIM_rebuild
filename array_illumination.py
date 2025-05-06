@@ -414,17 +414,17 @@ def spike_filter(fft_abs, display=False):
     :return:
     """
     # 高斯滤波，平滑处理
-    f = gaussian_filter(np.log(1 + fft_abs), sigma=0.5)
-    if display:
+    f = gaussian_filter(np.log(1 + fft_abs), sigma=0.5)#对数变换可以压缩数据动态范围，+1是为了防止出现log0,所有维度的标准差都为0.5
+    if display:#display 用于灵活控制是否显示图片
         display_image(f, 'Smoothed')
 
     # 水平方向滤波
-    f = f - gaussian_filter(f, sigma=(0, 4))
+    f = f - gaussian_filter(f, sigma=(0, 4))#第一个维度的标准差为0，第二个为4
     if display:
         display_image(f, 'Filtered left-right')
 
     # 垂直方向滤波
-    f = f - gaussian_filter(f, sigma=(4, 0))
+    f = f - gaussian_filter(f, sigma=(4, 0))#第一个维度的标准差为0，第二个为4
     if display:
         display_image(f, 'Filtered up-down')
 
@@ -434,14 +434,14 @@ def spike_filter(fft_abs, display=False):
     if display:
         display_image(f, 'Resmoothed')
 
-    # 截断
+    #截断，将所有的负值设置为0
     f = f * (f > 0)
     if display:
         display_image(f, 'Negative truncated')
 
     # 标准化处理
-    f -= f.mean()
-    f *= 1.0 / f.std()
+    f -= f.mean()#每一个都减去均值
+    f *= 1.0 / f.std()#每一个都除以标准差
     return f
 
 
@@ -451,7 +451,7 @@ def display_image(f, title):
     :param f: 要显示的图像数据
     :param title: 图像的标题
     """
-    plt.imshow(f, cmap="gray", interpolation='nearest')
+    plt.imshow(f, cmap="gray", interpolation='nearest')#最近邻插值
     plt.title(title)
     plt.show()
 
